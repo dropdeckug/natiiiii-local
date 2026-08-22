@@ -1,0 +1,1 @@
+CREATE POLICY "Users can delete own builds" ON public.builds FOR DELETE TO authenticated USING (auth.uid() = user_id);
