@@ -160,7 +160,7 @@ export interface GatewayCallOptions {
  * One chat-completions request. `google/*` models are served by Google AI
  * Studio when `GEMINI_API_KEY` exists, everything else by the Lovable AI
  * Gateway. Returns the raw Response so callers can stream or parse. On a
- * transient failure (404/429/5xx) it retries: Google AI Studio → Lovable
+ * transient failure (429/5xx) it retries: Google AI Studio → Lovable
  * Gateway → FALLBACK_MODEL.
  */
 export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> {
@@ -202,7 +202,7 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
     });
 
   const transient = (r: Response) =>
-    !r.ok && (r.status >= 500 || r.status === 429 || r.status === 404 || r.status === 400);
+    !r.ok && (r.status >= 500 || r.status === 429);
 
   if (preferGoogle && googleKey) {
     const resp = await sendGoogle(model);
@@ -217,7 +217,7 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
   }
 
   const resp = await sendLovable(model);
-  if (!transient(resp) || model === FALLBACK_MODEL) return resp;
+  if (!transient(resp) || model === FALLBACK_MODEL || provider === "lovable") return resp;
 
   console.warn(`[ai-gateway] ${model} returned ${resp.status}; retrying on ${FALLBACK_MODEL}`);
   return await sendLovable(FALLBACK_MODEL);

@@ -12,7 +12,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectStore, type ProjectFile } from "@/stores/projectStore";
 import { useBuildStore } from "@/stores/buildStore";
-import { parseBuildError, type ParsedBuildError } from "@/lib/tools/buildErrorParser";
+import type { ParsedBuildError } from "@/lib/tools/buildErrorParser";
 import { toast } from "sonner";
 import { logEvent } from "@/lib/logs/logSink";
 import { PACKAGE_NAME, SAFE_VERSION, sanitizeDependencyManifest } from "@/lib/tools/dependencyManifest";
@@ -46,6 +46,8 @@ interface RepairPlan {
   excludeFromBuild: string[];
   notes: string;
 }
+
+export const DEFAULT_REPAIR_MODEL = "openai/gpt-5";
 
 function isBuildConfigPath(path: string): boolean {
   return /(^|\/)(vite|postcss|tailwind|rollup|webpack|svelte|astro|nuxt|next)\.config(?:\.[\w.-]+)?\.(?:m|c)?[jt]s$/.test(path);
@@ -96,12 +98,16 @@ function collectAffectedFiles(parsed: ParsedBuildError): { path: string; content
   const includeConfigs = parsed.category === "vite-config" || parsed.category === "dependency" || parsed.category === "npm" || parsed.category === "unknown" || isBuildConfigPath(parsed.filePath || "");
   if (includeConfigs) {
     for (const f of flatten(useProjectStore.getState().files)) {
-      if (isBuildConfigPath(f.path)) push(f.path);
+      if (
+        isBuildConfigPath(f.path) ||
+        /(^|\/)(package\.json|tsconfig(?:\.[\w.-]+)?\.json|index\.html)$/.test(f.path) ||
+        /(^|\/)src\/(main|app)\.(?:tsx?|jsx?)$/i.test(f.path)
+      ) push(f.path);
     }
   }
   for (const u of parsed.unresolvedImports || []) push(u.filePath);
   push(parsed.filePath);
-  return result.slice(0, 12);
+  return result.slice(0, 20);
 }
 
 /** Merge a packageJsonPatch into the in-memory package.json. */
@@ -192,6 +198,7 @@ export interface RepairOutcome {
   patched: boolean;
   summary: string;
   edits: string[];
+  changedFiles: { path: string; before: string; after: string; reason: string }[];
 }
 
 export function isRepairable(parsed: ParsedBuildError | null): boolean {
@@ -203,11 +210,11 @@ export function isRepairable(parsed: ParsedBuildError | null): boolean {
 export async function runRepair(
   errorText: string,
   logs: string[],
-  opts: { phaseName: string; model?: string }
+  opts: { phaseName: string; parsed: ParsedBuildError; model?: string; projectId?: string; runId?: string | number | null }
 ): Promise<RepairOutcome> {
-  const parsed = parseBuildError(logs, errorText);
+  const parsed = opts.parsed;
   if (!isRepairable(parsed)) {
-    return { patched: false, summary: "Not auto-repairable", edits: [] };
+    return { patched: false, summary: "Not auto-repairable", edits: [], changedFiles: [] };
   }
 
   const buildStore = useBuildStore.getState();
@@ -219,6 +226,7 @@ export async function runRepair(
   );
   let packageJson: any = null;
   const deterministicEdits: string[] = [];
+  const deterministicChanges: RepairOutcome["changedFiles"] = [];
   try {
     packageJson = pkgFile?.content ? JSON.parse(pkgFile.content) : null;
   } catch {
@@ -230,8 +238,10 @@ export async function runRepair(
     if (manifestRepair.changed && pkgFile?.path) {
       const sanitized = JSON.stringify(packageJson, null, 2) + "\n";
       if (sanitized !== pkgFile.content) {
-        projectStore.markAiChanged(pkgFile.path, pkgFile.content || "");
+        const before = pkgFile.content || "";
+        projectStore.markAiChanged(pkgFile.path, before);
         projectStore.updateFileContent(pkgFile.path, sanitized);
+        deterministicChanges.push({ path: pkgFile.path, before, after: sanitized, reason: "Removed invalid dependency entries" });
         deterministicEdits.push(`Removed invalid dependency entries: ${manifestRepair.removed.join(", ")}`);
         logEvent({
           logType: "ai-repair",
@@ -258,12 +268,14 @@ export async function runRepair(
       body: {
         errorCategory: parsed!.category,
         errorDetail: parsed!.detail,
-        logs: logs.join("\n").slice(-4000),
+        logs: logs.join("\n").slice(-24000),
         affectedFiles,
         packageJson,
         unresolvedImports: parsed!.unresolvedImports || [],
         enabledPlugins: Array.from(projectStore.enabledPlugins || []),
-        model: opts.model,
+        model: opts.model || DEFAULT_REPAIR_MODEL,
+        projectId: opts.projectId,
+        runId: opts.runId,
       },
     });
     if (error) throw new Error(error.message);
@@ -272,17 +284,27 @@ export async function runRepair(
   } catch (e: any) {
     buildStore.completeAiEvent(evtId, "error");
     toast.error(`AI repair failed: ${e.message || e}`);
-    return { patched: false, summary: e.message || "AI repair failed", edits: [] };
+    return { patched: false, summary: e.message || "AI repair failed", edits: [], changedFiles: [] };
   }
 
   const edits: string[] = [...deterministicEdits];
+  const changedFiles: RepairOutcome["changedFiles"] = [...deterministicChanges];
+  const suppliedPaths = new Set(affectedFiles.map((file) => file.path));
 
   // 1. Apply file edits
   for (const edit of plan.fileEdits || []) {
     if (!edit?.path || typeof edit.newContent !== "string") continue;
     const existing = findFile(edit.path);
-    projectStore.markAiChanged(edit.path, existing?.content || "");
+    if (!existing || !suppliedPaths.has(existing.path)) continue;
+    const oldContent = existing.content || "";
+    if (oldContent === edit.newContent) continue;
+    projectStore.markAiChanged(edit.path, oldContent);
     projectStore.updateFileContent(edit.path, edit.newContent);
+    const beforeLines = oldContent.split("\n");
+    const afterLines = edit.newContent.split("\n");
+    const added = Math.max(0, afterLines.length - beforeLines.length);
+    const removed = Math.max(0, beforeLines.length - afterLines.length);
+    changedFiles.push({ path: existing.path, before: oldContent, after: edit.newContent, reason: edit.reason || "fix" });
     edits.push(`Patched ${edit.path} — ${edit.reason || "fix"}`);
     logEvent({ logType: "ai-repair", level: "info", message: `Patched ${edit.path} — ${edit.reason || "fix"}`, stepName: edit.path, meta: { method: "EDIT", pathname: edit.path } });
     buildStore.pushAiEvent({
@@ -290,24 +312,49 @@ export async function runRepair(
       title: `Repaired ${edit.path}`,
       detail: edit.reason,
       status: "done",
+      path: existing.path,
+      oldContent,
+      newContent: edit.newContent,
+      added,
+      removed,
     });
   }
 
   // 2. Apply package.json patch
+  const packageBefore = pkgFile?.content || "";
   const addedDeps = applyPackageJsonPatch(plan.packageJsonPatch || {});
   if (addedDeps.length > 0) {
+    const packageAfter = pkgFile?.content || packageBefore;
+    if (pkgFile && packageAfter !== packageBefore) changedFiles.push({ path: pkgFile.path, before: packageBefore, after: packageAfter, reason: "Dependency repair" });
     edits.push(`Added to package.json: ${addedDeps.join(", ")}`);
     buildStore.pushAiEvent({
       op: "edit",
       title: `Added ${addedDeps.length} dependencies`,
       detail: addedDeps.join(", "),
       status: "done",
+      path: pkgFile?.path || "package.json",
+      oldContent: packageBefore,
+      newContent: packageAfter,
     });
   }
 
   // 3. Apply build excludes (e.g. supabase/functions/**)
   const excluded = applyExcludeFromBuild(plan.excludeFromBuild || []);
   if (excluded.length > 0) {
+    const viteFile = flatten(projectStore.files).find((file) => file.path === "vite.config.ts" || file.path === "vite.config.js");
+    const originalViteFile = affectedFiles.find((file) => file.path === viteFile?.path);
+    if (viteFile?.content && originalViteFile && viteFile.content !== originalViteFile.content) {
+      changedFiles.push({ path: viteFile.path, before: originalViteFile.content, after: viteFile.content, reason: "Excluded server-only modules from the web build" });
+      buildStore.pushAiEvent({
+        op: "edit",
+        title: `Repaired ${viteFile.path}`,
+        detail: "Excluded server-only modules from the web build",
+        status: "done",
+        path: viteFile.path,
+        oldContent: originalViteFile.content,
+        newContent: viteFile.content,
+      });
+    }
     edits.push(`Excluded from web build: ${excluded.join(", ")}`);
     buildStore.pushAiEvent({
       op: "config",
@@ -323,12 +370,12 @@ export async function runRepair(
     toast.warning("AI Repair could not apply any changes.", {
       description: plan.notes || "Returning original error.",
     });
-    return { patched: false, summary: plan.notes || "No edits applied", edits: [] };
+    return { patched: false, summary: plan.notes || "No edits applied", edits: [], changedFiles: [] };
   }
 
   toast.success(`AI Repair applied ${edits.length} fix${edits.length === 1 ? "" : "es"}`, {
     description: plan.notes?.slice(0, 160) || "Retrying build phase…",
   });
 
-  return { patched: true, summary: plan.notes || "", edits };
+  return { patched: true, summary: plan.notes || "", edits, changedFiles };
 }

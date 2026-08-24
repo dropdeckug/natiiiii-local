@@ -601,7 +601,10 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       const failingStep = useBuildStore.getState().activeCiSteps.find((s: any) => s.conclusion === "failure");
       const excerpt = (failingStep as any)?.logExcerpt || "";
       const fullErr = (result.error || "Phase 1 failed") + (excerpt ? `\n\nFailing step: ${(failingStep as any)?.name}\n${excerpt}` : "");
-      const parsed = parseBuildError([excerpt, result.error || ""], fullErr);
+      const logEventId = buildStore.pushAiEvent({ op: "search", title: "Retrieving failed run logs", detail: `GitHub run ${result.runId ?? "pending"}`, status: "active", refs: [String(result.runId ?? "unknown")] });
+      const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
+      buildStore.updateAiEvent(logEventId, { detail: `${ciErrors.length} run-scoped error and warning entries loaded`, status: "done", completedAt: Date.now() });
+      const parsed = parseBuildError([...ciErrors, excerpt, result.error || ""], fullErr);
       if (!isRepairable(parsed)) throw new Error(fullErr);
       const fingerprint = buildFailureFingerprint(parsed, (failingStep as any)?.name || "phase1", fullErr);
       if (phase1Failures.has(fingerprint)) throw new Error(`${fullErr}\n\nAutomatic repair stopped because the same failure recurred.`);
@@ -612,7 +615,6 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
         description: parsed?.title?.slice(0, 120),
       });
       buildStore.setBuildButtonState("ai-wiring");
-      const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
       logEvent({
         logType: "ai-repair", level: "warning", phase: "phase1", runId: result.runId ?? null,
         message: `AI repair attempt ${p1Attempt}/${MAX_PHASE1_REPAIRS} — ${parsed?.title || "setup failure"}`,
@@ -620,6 +622,9 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       });
       const repair = await runRepair(fullErr, [...ciErrors, excerpt, result.error || ""], {
         phaseName: `Phase 1 setup (attempt ${p1Attempt})`,
+        parsed,
+        projectId: opts.projectId,
+        runId: result.runId,
       });
       logEvent({
         logType: "ai-repair", level: repair.patched ? "success" : "error", phase: "phase1",
@@ -634,6 +639,7 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       // Persist the repaired tree before creating the retry ZIP so the source
       // snapshot and the bytes sent to Phase 1 cannot diverge.
       await persistBuildSource(opts.projectId, `Phase 1 AI repair ${p1Attempt}`);
+      buildStore.pushAiEvent({ op: "config", title: "Saved repaired source snapshot", detail: repair.changedFiles.map((file) => file.path).join(", "), status: "done", refs: repair.changedFiles.map((file) => file.path) });
       result = await invokeSetup(await uploadBuildSource(opts.projectId, useProjectStore.getState().files, "setup"));
     }
     if (!result.success) throw new Error(result.error || "Phase 1 failed after AI repair attempts");
@@ -1241,8 +1247,10 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       const failingStep = useBuildStore.getState().activeCiSteps.find((s: any) => s.conclusion === "failure");
       const excerpt = failingStep?.logExcerpt || "";
       const fullErr = (result.error || "Phase 3 failed") + (excerpt ? `\n\nFailing step: ${failingStep?.name}\n${excerpt}` : "");
-
-      const parsed = parseBuildError([excerpt, result.error || ""], fullErr);
+      const logEventId = buildStore.pushAiEvent({ op: "search", title: "Retrieving failed run logs", detail: `GitHub run ${result.runId ?? "pending"}`, status: "active", refs: [String(result.runId ?? "unknown")] });
+      const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
+      buildStore.updateAiEvent(logEventId, { detail: `${ciErrors.length} run-scoped error and warning entries loaded`, status: "done", completedAt: Date.now() });
+      const parsed = parseBuildError([...ciErrors, excerpt, result.error || ""], fullErr);
       if (!isRepairable(parsed)) {
         // Not auto-fixable — surface the error and stop (do NOT restart from Phase 1).
         throw new Error(fullErr);
@@ -1256,7 +1264,6 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
         description: parsed?.title?.slice(0, 120),
       });
       buildStore.setBuildButtonState("ai-wiring");
-      const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
       logEvent({
         logType: "ai-repair",
         level: "warning",
@@ -1267,6 +1274,9 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       });
       const repair = await runRepair(fullErr, [...ciErrors, excerpt, result.error || ""], {
         phaseName: `Phase 3 rebuild (attempt ${repairAttempt})`,
+        parsed,
+        projectId: opts.projectId,
+        runId: result.runId,
       });
       logEvent({
         logType: "ai-repair",
@@ -1281,6 +1291,7 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
         throw new Error(fullErr);
       }
       await persistBuildSource(opts.projectId, `Phase 3 retry ${repairAttempt}`);
+      buildStore.pushAiEvent({ op: "config", title: "Saved repaired source snapshot", detail: repair.changedFiles.map((file) => file.path).join(", "), status: "done", refs: repair.changedFiles.map((file) => file.path) });
       buildStore.setBuildButtonState("phase2-build");
       buildStore.setThinkingCaption(`Retrying Phase 3 with AI patches (attempt ${repairAttempt}/${MAX_PHASE3_REPAIRS})…`);
       const refreshed = useProjectStore.getState().files;

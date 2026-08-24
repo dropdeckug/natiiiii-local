@@ -10,7 +10,9 @@
 // Never touches: .github/workflows/**, package-lock.json, secrets.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { gatewayFetch, DEFAULT_MODEL } from "../_shared/aiGateway.ts";
+import { gatewayFetch } from "../_shared/aiGateway.ts";
+
+const DEFAULT_REPAIR_MODEL = "openai/gpt-5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,12 +24,12 @@ The user's web build failed because of CODE-level issues (bad imports, missing n
 Deno-only specifiers like \`npm:foo\` or \`https://esm.sh/x\` leaking into the web build,
 duplicate imports, syntax errors, missing exports).
 
-You will receive the parsed error, a few affected file contents, and the current package.json.
+You will receive the parsed error, exact run-scoped logs, affected file contents, and the current package.json.
 Return STRICT JSON via the \`emit_repair\` tool with this shape:
 
 {
   "fileEdits":  [{ "path": "...", "newContent": "...", "reason": "..." }],
-  "packageJsonPatch": { "dependencies": {...}, "devDependencies": {...} },
+  "packageJsonPatch": [{ "name": "package-name", "version": "^1.0.0", "dev": false }],
   "excludeFromBuild": ["supabase/functions/**"],
   "notes": "1-3 sentence summary"
 }
@@ -118,7 +120,9 @@ serve(async (req) => {
       packageJson = null,
       unresolvedImports = [],
         enabledPlugins = [],
-      model = DEFAULT_MODEL,
+      model = DEFAULT_REPAIR_MODEL,
+      projectId = null,
+      runId = null,
     } = body || {};
 
     if (!Deno.env.get("LOVABLE_API_KEY")) {
@@ -131,6 +135,8 @@ serve(async (req) => {
     const userMsg = [
       `Error category: ${errorCategory}`,
       `Error detail: ${errorDetail}`,
+      `Project ID: ${projectId || "unknown"}`,
+      `GitHub run ID: ${runId || "unknown"}`,
       `Enabled plugin IDs: ${Array.isArray(enabledPlugins) && enabledPlugins.length ? enabledPlugins.join(", ") : "(none)"}`,
       `Scope rule: repair only the logged build failure. Do not add, configure, or search for plugin/auth features unless they are in Enabled plugin IDs.`,
       unresolvedImports.length > 0
@@ -138,12 +144,12 @@ serve(async (req) => {
             .map((u: any) => `  - ${u.specifier} (${u.filePath})`)
             .join("\n")}`
         : "",
-      logs ? `\nRecent build logs (last lines):\n${String(logs).slice(-3000)}` : "",
+      logs ? `\nChronological run-scoped build evidence:\n${String(logs).slice(-24000)}` : "",
       packageJson
         ? `\nCurrent package.json (truncated):\n${JSON.stringify(packageJson, null, 2).slice(0, 4000)}`
         : "",
       `\nAffected file contents:`,
-      ...affectedFiles.slice(0, 8).map(
+      ...affectedFiles.slice(0, 20).map(
         (f: any) =>
           `\n--- FILE: ${f.path} ---\n${String(f.content || "").slice(0, 6000)}\n--- END ---`
       ),
@@ -151,6 +157,7 @@ serve(async (req) => {
 
     const aiResp = await gatewayFetch({
       model,
+      provider: "lovable",
       payload: {
         messages: [
           { role: "system", content: SYSTEM_PROMPT },

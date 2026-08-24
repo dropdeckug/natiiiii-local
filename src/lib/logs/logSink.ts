@@ -152,11 +152,34 @@ export async function fetchErrorContext(opts: {
   limit?: number;
 }): Promise<string[]> {
   const limit = opts.limit ?? 100;
-  return events
+  const inMemory = events
     .filter((e) => e.level === "error" || e.level === "warning")
+    .filter((e) => (opts.projectId ? e.projectId === opts.projectId : true))
     .filter((e) => (opts.runId ? String(e.runId ?? "") === String(opts.runId) : true))
     .slice(-limit)
     .map((e) => `[${e.logType}] ${e.message}${e.raw ? `\n${e.raw}` : ""}`);
+
+  try {
+    const { supabase } = await import("@/integrations/supabase/client");
+    let query = supabase
+      .from("build_logs")
+      .select("ts, log_type, level, phase, job_name, step_name, event_message, raw_excerpt")
+      .in("level", ["error", "warning"])
+      .order("ts", { ascending: false })
+      .limit(limit);
+    if (opts.projectId) query = query.eq("project_id", opts.projectId);
+    if (opts.runId != null) query = query.eq("run_id", Number(opts.runId));
+    const { data, error } = await query;
+    if (error) throw error;
+    const persisted = [...(data ?? [])].reverse().map((row) => {
+      const scope = [row.phase, row.job_name, row.step_name].filter(Boolean).join("/");
+      return `${row.ts} [${row.log_type}${scope ? `/${scope}` : ""}] ${row.event_message}${row.raw_excerpt ? `\n${row.raw_excerpt}` : ""}`;
+    });
+    return Array.from(new Set([...persisted, ...inMemory])).slice(-limit);
+  } catch (error) {
+    console.warn("Persisted repair log retrieval failed; using live buffer:", error);
+    return inMemory;
+  }
 }
 
 /**
