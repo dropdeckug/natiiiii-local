@@ -30,6 +30,7 @@ import {
   recordSuccessfulFix,
   type KnownFix,
 } from "./knowledgeBase";
+import { tryDeterministicRepair } from "./deterministicRepairMatrix";
 
 export const MAX_REPAIR_ATTEMPTS = 4;
 
@@ -266,7 +267,20 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
     };
   };
 
-  // ── Fast path: a fix for this exact signature is already known. ──
+  // ── Fast path 1: Deterministic repair matrix for known structural issues ──
+  const attemptedFixes = new Set<string>();
+  const deterministic = tryDeterministicRepair(input.errorText, input.stepName, attemptedFixes);
+  if (deterministic.applied && deterministic.summary) {
+    push(ctx, "note", `Applied deterministic repair: ${deterministic.summary}`);
+    await callback(ctx, "deterministic-repair", "running", `Applying deterministic repair for ${input.stepName}: ${deterministic.summary}`);
+    const verdict = await input.verifyStep(input.stepName);
+    push(ctx, "verify", `Deterministic repair verification: ${verdict.ok ? "passed" : "failed"}`, verdict.output);
+    if (verdict.ok) {
+      return finish("fixed", 1, `Deterministically resolved: ${deterministic.summary}`, true);
+    }
+  }
+
+  // ── Fast path 2: a fix for this exact signature is already known in knowledge base. ──
   const known = await lookupKnownFix(signature);
   if (known && fixConfidence(known) >= HIGH_CONFIDENCE && known.patches.length > 0) {
     push(ctx, "note", `Knowledge base hit (confidence ${fixConfidence(known)})`, known.summary || undefined);

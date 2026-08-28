@@ -23,34 +23,48 @@ function record(entry: NetworkEntry) {
 }
 
 export function installNetworkBuffer() {
-  if (installed || typeof window === "undefined") return;
+  if (installed || typeof window === "undefined" || typeof window.fetch !== "function") return;
   installed = true;
 
-  const origFetch = window.fetch.bind(window);
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
-    const method = (init?.method || (input instanceof Request ? input.method : "GET") || "GET").toUpperCase();
-    const startedAt = Date.now();
+  try {
+    const origFetch = window.fetch.bind(window);
+    const customFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : (input as Request).url;
+      const method = (init?.method || (input instanceof Request ? input.method : "GET") || "GET").toUpperCase();
+      const startedAt = Date.now();
+      try {
+        const resp = await origFetch(input as any, init);
+        record({
+          url, method,
+          status: resp.status,
+          ok: resp.ok,
+          durationMs: Date.now() - startedAt,
+          startedAt,
+        });
+        return resp;
+      } catch (e: any) {
+        record({
+          url, method,
+          startedAt,
+          durationMs: Date.now() - startedAt,
+          error: e?.message || String(e),
+        });
+        throw e;
+      }
+    };
+
     try {
-      const resp = await origFetch(input as any, init);
-      record({
-        url, method,
-        status: resp.status,
-        ok: resp.ok,
-        durationMs: Date.now() - startedAt,
-        startedAt,
+      Object.defineProperty(window, "fetch", {
+        value: customFetch,
+        writable: true,
+        configurable: true,
       });
-      return resp;
-    } catch (e: any) {
-      record({
-        url, method,
-        startedAt,
-        durationMs: Date.now() - startedAt,
-        error: e?.message || String(e),
-      });
-      throw e;
+    } catch {
+      (window as any).fetch = customFetch;
     }
-  };
+  } catch (err) {
+    console.warn("[networkBuffer] Failed to wrap window.fetch:", err);
+  }
 }
 
 export function getNetworkRequests(opts: {

@@ -2,6 +2,7 @@ import type { GeneratorConfig, GeneratedFile } from "./shared";
 import { getSharedFiles } from "./shared";
 
 import { generateVariablesGradle, CURRENT_ANDROID_CONFIG } from "./versionMatrix";
+import { PLATFORM_RELEASE } from "../../../cpr/versions/index";
 
 const variablesGradle = () => generateVariablesGradle();
 
@@ -12,7 +13,7 @@ const rootBuildGradle = () =>
         mavenCentral()
     }
     dependencies {
-        classpath 'com.android.tools.build:gradle:8.7.3'
+        classpath 'com.android.tools.build:gradle:${PLATFORM_RELEASE.agpVersion}'
         classpath 'com.google.gms:google-services:4.4.0'
     }
 }
@@ -61,14 +62,14 @@ android {
     }
 
     compileOptions {
-        sourceCompatibility JavaVersion.VERSION_21
-        targetCompatibility JavaVersion.VERSION_21
+        sourceCompatibility JavaVersion.VERSION_${PLATFORM_RELEASE.jdkVersion}
+        targetCompatibility JavaVersion.VERSION_${PLATFORM_RELEASE.jdkVersion}
     }
 }
 
 dependencies {
     // Capacitor core (Maven Central artifact)
-    implementation 'com.capacitorjs:core:7.5.0'
+    implementation 'com.capacitorjs:core:${PLATFORM_RELEASE.capacitorVersion}'
     implementation 'org.apache.cordova:framework:10.1.1'
     implementation "androidx.appcompat:appcompat:\$androidxAppCompatVersion"
     implementation "androidx.coordinatorlayout:coordinatorlayout:\$androidxCoordinatorLayoutVersion"
@@ -207,7 +208,6 @@ const capacitorConfigJson = (packageName: string, appName: string, url?: string)
       androidScheme: "https",
       hostname: "localhost",
       cleartext: true,
-      ...(url ? { url } : {}),
     },
     android: {
       webContentsDebuggingEnabled: true,
@@ -226,13 +226,13 @@ const capacitorConfigJson = (packageName: string, appName: string, url?: string)
   return JSON.stringify(config, null, 2);
 };
 
-const fallbackIndexHtml = (url?: string) =>
+const fallbackIndexHtml = (_url?: string) =>
 `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Loading...</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <title>App</title>
   <style>
     body { margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; font-family: system-ui, sans-serif; background: #111; color: #fff; }
     .loader { text-align: center; }
@@ -245,7 +245,6 @@ const fallbackIndexHtml = (url?: string) =>
     <div class="spinner"></div>
     <p>Loading app...</p>
   </div>
-${url ? `  <script>window.location.href = ${JSON.stringify(url)};</script>` : ''}
 </body>
 </html>
 `;

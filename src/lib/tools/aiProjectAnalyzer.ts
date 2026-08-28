@@ -5,6 +5,7 @@
  */
 import JSZip from "jszip";
 import { discoverProjectEntries, indexProject, type ProjectEntryCandidate } from "@/lib/tools/projectIndexer";
+import type { CprFile } from "../../../cpr/types/index";
 
 const ANALYZE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-with-ai`;
 
@@ -30,12 +31,17 @@ export interface AIProjectMetadata {
   remediationHints?: string[];
   entryCandidates: ProjectEntryCandidate[];
   sourceBlocker?: string;
+  isSelfContained?: boolean;
+  devServerRedirectIssues?: string[];
+  selfContainedRemedies?: string[];
 }
 
 interface AnalyzeInputs {
   fileList: string[];
   indexHtmlContent: string | null;
   packageJsonContent: string | null;
+  viteConfigContent?: string | null;
+  capacitorConfigContent?: string | null;
   totalFiles: number;
   totalSize: string;
   entryCandidates: ProjectEntryCandidate[];
@@ -47,6 +53,8 @@ async function readZip(file: File): Promise<AnalyzeInputs> {
   const fileList: string[] = [];
   let packageJsonContent: string | null = null;
   let indexHtmlContent: string | null = null;
+  let viteConfigContent: string | null = null;
+  let capacitorConfigContent: string | null = null;
   let totalBytes = 0;
   const reads: Promise<void>[] = [];
   const projectFiles: { path: string; type: "file"; content?: string }[] = [];
@@ -72,6 +80,12 @@ async function readZip(file: File): Promise<AnalyzeInputs> {
     if (lower.endsWith("/index.html") || lower === "index.html") {
       reads.push(entry.async("string").then((c) => { if (!indexHtmlContent) indexHtmlContent = c; projectFiles.push({ path: relativePath, type: "file", content: c }); }));
     }
+    if (lower.includes("vite.config")) {
+      reads.push(entry.async("string").then((c) => { if (!viteConfigContent) viteConfigContent = c; }));
+    }
+    if (lower.includes("capacitor.config")) {
+      reads.push(entry.async("string").then((c) => { if (!capacitorConfigContent) capacitorConfigContent = c; }));
+    }
     if (!lower.endsWith("/package.json") && lower !== "package.json" && !lower.endsWith("/index.html") && lower !== "index.html" && !isBuildDescriptor) {
       projectFiles.push({ path: relativePath, type: "file" });
     }
@@ -86,7 +100,17 @@ async function readZip(file: File): Promise<AnalyzeInputs> {
   const entryCandidates = discoverProjectEntries(projectFiles);
   const sourceIndex = indexProject(projectFiles);
   const sourceBlocker = entryCandidates.length === 0 ? sourceIndex.staticBlockers[0] : undefined;
-  return { fileList, indexHtmlContent, packageJsonContent, totalFiles: fileList.length, totalSize, entryCandidates, sourceBlocker };
+  return {
+    fileList,
+    indexHtmlContent,
+    packageJsonContent,
+    viteConfigContent,
+    capacitorConfigContent,
+    totalFiles: fileList.length,
+    totalSize,
+    entryCandidates,
+    sourceBlocker,
+  };
 }
 
 export async function analyzeUploadWithAI(file: File): Promise<AIProjectMetadata> {
@@ -98,15 +122,46 @@ export async function analyzeGitRepoWithAI(opts: {
   fileList: string[];
   packageJsonContent: string | null;
   indexHtmlContent: string | null;
+  viteConfigContent?: string | null;
+  capacitorConfigContent?: string | null;
 }): Promise<AIProjectMetadata> {
   return callAnalyze({
     fileList: opts.fileList,
     packageJsonContent: opts.packageJsonContent,
     indexHtmlContent: opts.indexHtmlContent,
+    viteConfigContent: opts.viteConfigContent,
+    capacitorConfigContent: opts.capacitorConfigContent,
     totalFiles: opts.fileList.length,
     totalSize: `${opts.fileList.length} files`,
     entryCandidates: discoverProjectEntries(opts.fileList.map((path) => ({ path, type: "file" as const }))),
   });
+}
+
+/**
+ * AI Intelligence analysis for in-memory CPR files during pipeline run.
+ */
+export async function analyzeCprFilesWithAI(files: CprFile[]): Promise<AIProjectMetadata | null> {
+  try {
+    const fileList = files.map((f) => f.path);
+    const packageJsonContent = files.find((f) => f.path.endsWith("package.json"))?.content ?? null;
+    const indexHtmlContent = files.find((f) => f.path.endsWith("index.html"))?.content ?? null;
+    const viteConfigContent = files.find((f) => f.path.includes("vite.config"))?.content ?? null;
+    const capacitorConfigContent = files.find((f) => f.path.includes("capacitor.config"))?.content ?? null;
+
+    return await callAnalyze({
+      fileList,
+      packageJsonContent,
+      indexHtmlContent,
+      viteConfigContent,
+      capacitorConfigContent,
+      totalFiles: fileList.length,
+      totalSize: `${fileList.length} files`,
+      entryCandidates: discoverProjectEntries(files.map((f) => ({ path: f.path, type: "file" as const }))),
+    });
+  } catch (err) {
+    console.warn("[CPR AI Intelligence] Non-fatal AI analysis fallback:", err);
+    return null;
+  }
 }
 
 async function callAnalyze(inputs: AnalyzeInputs): Promise<AIProjectMetadata> {

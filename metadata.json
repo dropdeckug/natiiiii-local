@@ -1,0 +1,8 @@
+{
+  "name": "Native Bridge Studio",
+  "description": "Convert your React web apps into native Android & iOS mobile apps with AI-powered build tools.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

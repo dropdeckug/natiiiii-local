@@ -27,6 +27,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   FolderTree,
+  Wrench,
+  Sparkles,
 } from "lucide-react";
 import GitHubImport from "@/components/create/GitHubImport";
 import { useProjectStore } from "@/stores/projectStore";
@@ -126,6 +128,8 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
   const [appRoot, setAppRoot] = useState("");
   const [selectedEntry, setSelectedEntry] = useState<ProjectEntryCandidate | null>(null);
   const [repoMeta, setRepoMeta] = useState<{ url?: string; branch?: string } | null>(null);
+  const [blockerOverride, setBlockerOverride] = useState(false);
+  const [isAutoFixing, setIsAutoFixing] = useState(false);
 
   const togglePlatform = (id: string) => {
     setSelectedPlatforms((prev) =>
@@ -183,7 +187,15 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
       try {
         const rep = scanReactReadiness(flat, result);
         setReadiness(rep);
-        setDecisions({});
+        // Pre-populate sensible defaults for user decisions
+        const initialDecisions: Record<string, string> = {};
+        for (const d of rep.needsUserDecision) {
+          if (d.options && d.options.length > 0) {
+            const rec = d.options.find((o) => o.recommended) || d.options[0];
+            initialDecisions[d.id] = rec.value;
+          }
+        }
+        setDecisions(initialDecisions);
         setEnvAck(false);
       } catch (err) {
         console.warn("readiness scan failed:", err);
@@ -191,6 +203,67 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
       }
     } else {
       setReadiness(null);
+    }
+  };
+
+  const handleAutoFix = async () => {
+    setIsAutoFixing(true);
+    try {
+      const store = useProjectStore.getState();
+      const files = store.files;
+      const flat: { path: string; type: "file" | "folder"; content?: string }[] = [];
+      const walk = (nodes: any[]) => {
+        for (const n of nodes) {
+          flat.push({ path: n.path, type: n.type, content: n.content });
+          if (n.children) walk(n.children);
+        }
+      };
+      walk(files);
+
+      // 1. Locate package.json
+      const pkgEntry = flat.find((f) => f.path === "package.json");
+      if (pkgEntry && pkgEntry.content && readiness) {
+        let pkgObj: any = {};
+        try {
+          pkgObj = JSON.parse(pkgEntry.content);
+        } catch {
+          pkgObj = {};
+        }
+        pkgObj.dependencies = pkgObj.dependencies || {};
+
+        // Find undeclared imports and inject them
+        const unresDecision = readiness.needsUserDecision.find((d) => d.id === "unresolved-imports");
+        if (unresDecision && unresDecision.values) {
+          for (const pkgName of unresDecision.values) {
+            if (!pkgObj.dependencies[pkgName]) {
+              pkgObj.dependencies[pkgName] = "latest";
+            }
+          }
+        }
+
+        store.updateFileContent("package.json", JSON.stringify(pkgObj, null, 2) + "\n");
+      }
+
+      // 2. Fix BrowserRouter to HashRouter if requested or detected
+      if (decisions["router-mode"] === "hash" || (readiness && readiness.checks.some((c) => c.id === "router-mode"))) {
+        for (const f of flat) {
+          if (f.content && /from\s+['"]react-router-dom['"]/.test(f.content) && /BrowserRouter/.test(f.content)) {
+            const updated = f.content
+              .replace(/BrowserRouter/g, "HashRouter");
+            store.updateFileContent(f.path, updated);
+          }
+        }
+      }
+
+      toast.success("Applied automated readiness fixes!");
+      // Re-run scan to refresh report
+      setTimeout(() => {
+        runScan();
+        setIsAutoFixing(false);
+      }, 200);
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to apply automatic fixes");
+      setIsAutoFixing(false);
     }
   };
 
@@ -217,7 +290,8 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
 
   const readinessSatisfied = () => {
     if (!readiness) return true;
-    if (!readiness.ok) return false; // hard blockers
+    if (blockerOverride) return true; // User explicitly chose to proceed
+    if (!readiness.ok) return false; // hard blockers (e.g. localhost cleartext without DEV guard)
     for (const d of readiness.needsUserDecision) {
       if (d.id === "env-vars") { if (!envAck) return false; }
       else if (!decisions[d.id]) return false;
@@ -432,14 +506,28 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
         )}
 
         {readiness && (
-          <div className="rounded-md border border-border bg-background/50 p-3 space-y-2">
+          <div className="rounded-md border border-border bg-background/50 p-3 space-y-2.5">
             <div className="flex items-center justify-between">
-              <span className="text-xs font-medium">Blank-screen readiness</span>
-              <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
-                readiness.blankScreenRisk === "low" ? "bg-emerald-500/10 text-emerald-600" :
-                readiness.blankScreenRisk === "medium" ? "bg-amber-500/10 text-amber-600" :
-                "bg-destructive/10 text-destructive"
-              }`}>{readiness.blankScreenRisk} risk</span>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-medium">Blank-screen readiness</span>
+                <span className={`text-[10px] uppercase tracking-wider px-2 py-0.5 rounded ${
+                  readiness.blankScreenRisk === "low" ? "bg-emerald-500/10 text-emerald-600" :
+                  readiness.blankScreenRisk === "medium" ? "bg-amber-500/10 text-amber-600" :
+                  "bg-destructive/10 text-destructive"
+                }`}>{readiness.blankScreenRisk} risk</span>
+              </div>
+              {(readiness.fixableAutomatically.length > 0 || readiness.needsUserDecision.length > 0) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleAutoFix}
+                  disabled={isAutoFixing}
+                  className="h-6 text-[11px] px-2 gap-1 border-primary/40 text-primary hover:bg-primary/10"
+                >
+                  {isAutoFixing ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                  Auto-Fix Issues
+                </Button>
+              )}
             </div>
 
             {readiness.checks.length === 0 && (
@@ -463,7 +551,7 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
             ))}
 
             {readiness.needsUserDecision.map((d) => (
-              <div key={d.id} className="pt-1 border-t border-border/50">
+              <div key={d.id} className="pt-1.5 border-t border-border/50">
                 <div className="text-[11px] font-medium mb-1">{d.label}</div>
                 <div className="text-[10px] text-muted-foreground mb-1.5">{d.message}</div>
                 {d.id === "env-vars" ? (
@@ -494,11 +582,23 @@ const CreateProjectWizard = ({ open, onClose }: CreateProjectWizardProps) => {
             ))}
 
             {readiness.hardBlockers.length > 0 && (
-              <div className="text-[11px] text-destructive font-medium border-t border-destructive/20 pt-2">
-                Fix these in your source before continuing:
-                <ul className="list-disc pl-4 mt-1 font-normal">
-                  {readiness.hardBlockers.map((b, i) => <li key={i}>{b}</li>)}
-                </ul>
+              <div className="text-[11px] text-destructive font-medium border-t border-destructive/20 pt-2 space-y-2">
+                <div>
+                  Issues detected in your source:
+                  <ul className="list-disc pl-4 mt-1 font-normal">
+                    {readiness.hardBlockers.map((b, i) => <li key={i}>{b}</li>)}
+                  </ul>
+                </div>
+                
+                <label className="flex items-center gap-2 p-2 rounded bg-destructive/5 border border-destructive/20 text-foreground text-xs cursor-pointer font-normal">
+                  <input
+                    type="checkbox"
+                    checked={blockerOverride}
+                    onChange={(e) => setBlockerOverride(e.target.checked)}
+                    className="rounded border-destructive/40 text-primary focus:ring-primary"
+                  />
+                  <span>Proceed anyway (I acknowledge potential native build/runtime errors)</span>
+                </label>
               </div>
             )}
           </div>

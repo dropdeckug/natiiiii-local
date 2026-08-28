@@ -139,6 +139,18 @@ export function transformSource(files: CprFile[], opts: TransformOptions): Trans
       });
     }
 
+    // --- external dev server / Laravel redirects ---
+    const redirectRe = /window\.location(?:\.href|\.replace|\.assign)?\s*=\s*['"`]https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):8000([^'"`]*)['"`]/g;
+    if (redirectRe.test(content)) {
+      content = content.replace(redirectRe, 'window.location.hash = "#$1"');
+      findings.push({
+        kind: "redirect-neutralized",
+        file: file.path,
+        detail: "Neutralized hardcoded external Laravel / localhost:8000 redirect to self-contained hash route.",
+        autoFixed: true,
+      });
+    }
+
     // --- web-only UI ---
     for (const rule of WEB_ONLY_UI) {
       if (!rule.re.test(content)) continue;

@@ -12,6 +12,8 @@ import { auditDependencies, gradleResolutionSnippet, installCommandFor } from ".
 import { transformSource, isExcluded } from "../../../cpr/phase-3-transform/index.ts";
 import { ensureTypescriptConfig, emptyTsconfigResult } from "../../../cpr/phase-3-transform/tsconfig.ts";
 import { normalizeModuleSystem, emptyModuleSystemResult } from "../../../cpr/phase-3-transform/module-system.ts";
+import { harmonizeProjectStructure } from "@/lib/tools/intelligentTransformer";
+import { analyzeCprFilesWithAI } from "@/lib/tools/aiProjectAnalyzer";
 import { buildPreflightReport } from "../../../cpr/phase-5-report/index.ts";
 import { emptyVerifyResult, MAX_AUTO_BUILD_RETRIES } from "../../../cpr/phase-4-verify/index.ts";
 import { PLATFORM_CAPACITOR_MAJOR, PLATFORM_NODE_VERSION, PLATFORM_RELEASE } from "../../../cpr/versions/index.ts";
@@ -72,10 +74,11 @@ export const CPR_STEPS: CprStepDef[] = [
     label: "Deriving project topology",
     weight: 14,
     assurance: [
+      "Deploying CPR Intelligence AI model to scan files and entrypoints…",
       "Interrogating manifests to infer the authoritative toolchain…",
       "Triangulating framework, bundler and package-manager provenance…",
+      "Auditing project topology for self-contained execution…",
       "Resolving the emitted output directory with corroborating evidence…",
-      "Appraising monorepo topology and electing the mobile-facing workspace…",
     ],
   },
   {
@@ -84,6 +87,7 @@ export const CPR_STEPS: CprStepDef[] = [
     weight: 6,
     assurance: [
       "Adjudicating your project shape against the CPR capability matrix…",
+      "Verifying application self-containment and dev server isolation…",
       "Screening for server-rendered surfaces incompatible with a WebView…",
     ],
   },
@@ -103,10 +107,11 @@ export const CPR_STEPS: CprStepDef[] = [
     label: "Neutralising blank-screen vectors",
     weight: 22,
     assurance: [
+      "Eliminating external / Laravel server redirects and decoupling dev servers…",
+      "Harmonizing entry scripts and ensuring dev server points inside the app itself…",
       "Converting history-mode routing to hash routing for file:// resolution…",
       "Rewriting absolute asset references into relative, WebView-safe paths…",
       "Auditing for localhost endpoints and undefined environment bindings…",
-      "Suppressing web-only affordances that have no meaning on a device…",
     ],
   },
   {
@@ -278,9 +283,27 @@ export async function runCpr(
     /* ---------------------------------------------------------- 2. detect */
     await begin("detect");
     const scan = quickScan(usable);
+
+    // AI-powered CPR intelligence pass
+    let aiMetadata: any = null;
+    try {
+      aiMetadata = await analyzeCprFilesWithAI(usable);
+      if (aiMetadata?.assuranceMessage) {
+        scan.notes.push(`CPR AI Model: ${aiMetadata.assuranceMessage}`);
+      }
+      if (aiMetadata?.devServerRedirectIssues?.length) {
+        for (const issue of aiMetadata.devServerRedirectIssues) {
+          scan.notes.push(`AI Flag: ${issue}`);
+        }
+      }
+    } catch {
+      // Non-blocking fallback to heuristic CPR detection
+    }
+
     finish(
       "detect",
-      `${scan.frameworkLabel} · ${scan.buildToolLabel} · output \`${scan.outputDir}\` (${scan.outputConfidence} confidence)`,
+      `${scan.frameworkLabel} · ${scan.buildToolLabel} · output \`${scan.outputDir}\` (${scan.outputConfidence} confidence)` +
+        (aiMetadata ? " · AI Verified" : ""),
     );
 
     /* ------------------------------------------------------------ 3. gate */
@@ -328,17 +351,22 @@ export async function runCpr(
       apiBaseUrl: opts.apiBaseUrl,
       providedEnv: opts.providedEnv,
     });
-    const autoFixed = transform.findings.filter((f) => f.autoFixed).length;
+
+    // Intelligent project harmonization: normalizes Vite base URLs, fixes mobile HTML viewports,
+    // removes dev-only Lovable/v0 plugins, and ensures webDir alignment
+    const harmonization = harmonizeProjectStructure(usable, root, scan.framework);
+
+    const autoFixed = transform.findings.filter((f) => f.autoFixed).length + harmonization.patches.length;
     finish(
       "transform",
-      `${transform.findings.length} findings · ${autoFixed} auto-remediated`,
+      `${transform.findings.length + harmonization.logs.length} findings · ${autoFixed} auto-remediated`,
     );
 
     /* ----------------------------------------------------- 6. canonicalize */
     await begin("canonicalize");
     const prefix = root ? `${root}/` : "";
-    const webDir = scan.outputDir;
-    const patches = [...transform.patches];
+    const webDir = harmonization.detectedWebDir || scan.outputDir;
+    const patches = [...transform.patches, ...harmonization.patches];
     const canonicalDeletions = Array.from(new Set([
       ...transform.deletions,
       ...audit.lockFilesRemoved,

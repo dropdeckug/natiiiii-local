@@ -11,7 +11,16 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { fileList, indexHtmlContent, packageJsonContent, totalFiles, totalSize, stream } = await req.json();
+    const {
+      fileList,
+      indexHtmlContent,
+      packageJsonContent,
+      viteConfigContent,
+      capacitorConfigContent,
+      totalFiles,
+      totalSize,
+      stream,
+    } = await req.json();
     if (!Deno.env.get("LOVABLE_API_KEY")) {
       throw new Error("LOVABLE_API_KEY is not configured");
     }
@@ -20,8 +29,8 @@ Deno.serve(async (req) => {
 - Total files: ${totalFiles || 0}
 - Total size: ${totalSize || "unknown"}
 
-## File list (first 50):
-${(fileList || []).slice(0, 50).join("\n")}
+## File list (first 60):
+${(fileList || []).slice(0, 60).join("\n")}
 
 ## index.html content:
 \`\`\`html
@@ -31,21 +40,31 @@ ${indexHtmlContent || "Not found"}
 ## package.json content:
 \`\`\`json
 ${packageJsonContent || "Not found"}
+\`\`\`
+
+## vite.config content:
+\`\`\`ts
+${viteConfigContent || "Not found"}
+\`\`\`
+
+## capacitor.config content:
+\`\`\`ts
+${capacitorConfigContent || "Not found"}
 \`\`\``;
 
     // ─── STREAMING MODE: Real-time AI chat analysis ───
     if (stream) {
-      const streamPrompt = `You are ForgeAI, a build engineer analyzing a web project for conversion to a native mobile app.
+      const streamPrompt = `You are ForgeAI, a CPR build intelligence engineer analyzing a web project for conversion to a 100% self-contained native mobile app.
 
 Analyze this project step-by-step and write a comprehensive markdown report. Be dynamic and specific about what you find. Use this exact structure:
 
-1. Start with "I'm analyzing your project..." 
+1. Start with "I'm analyzing your project with CPR Intelligence..." 
 2. Then analyze each area with markdown headers and bullet points:
-   - **Project Structure** — file count, folder structure observations
+   - **Project Structure & Topology** — file count, folder structure observations
    - **Framework & Dependencies** — detected framework, key dependencies, version info
+   - **Self-Contained Dev Server & Redirection Audit** — check for any external dev server redirects (e.g. Laravel localhost:8000, laravel-vite-plugin, hardcoded URLs, server.url) and ensure the dev server points inside the app itself
    - **Build Configuration** — build scripts, output directory, entry points
    - **Compatibility Assessment** — check for native API usage, service workers, SSR concerns
-   - **Security Scan** — check for suspicious patterns, eval usage, obfuscated code
    - **Engine Recommendation** — which engine (Capacitor, WebView, TWA) and why
 3. End with a clear verdict: either "Your project looks great! Ready to build." or list specific issues that need fixing.
 
@@ -160,6 +179,17 @@ Always call the extract_project_metadata tool with your findings.`,
                   outputDir: { type: "string", description: "Build output directory (e.g. dist, build, .next)" },
                   entryPoint: { type: "string", description: "Main entry file path" }
                   ,projectShape: { type: "string", description: "Normalized project shape: vite-spa, react-cra, next-static, next-ssr, angular, vue, svelte, plain-html, monorepo, unknown" }
+                  ,isSelfContained: { type: "boolean", description: "Whether the app is self-contained with no external server redirects" }
+                  ,devServerRedirectIssues: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "List of detected external/Laravel dev server redirects or coupling issues"
+                  }
+                  ,selfContainedRemedies: {
+                    type: "array",
+                    items: { type: "string" },
+                    description: "Remedies applied to make the app 100% self-contained"
+                  }
                   ,needsBoilerplate: { type: "boolean", description: "Whether index.html appears to be missing HTML5 boilerplate such as doctype/head/body/viewport" }
                   ,remediationHints: {
                     type: "array",

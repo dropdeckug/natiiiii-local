@@ -238,36 +238,51 @@ let tapInstalled = false;
 
 /** Patch window.fetch to record API requests as log events. */
 export function installApiLogTap() {
-  if (tapInstalled || typeof window === "undefined" || !window.fetch) return;
+  if (tapInstalled || typeof window === "undefined" || typeof window.fetch !== "function") return;
   tapInstalled = true;
-  const originalFetch = window.fetch.bind(window);
 
-  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-    const started = performance.now();
-    const url =
-      typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const method = (init?.method || (input as Request)?.method || "GET").toUpperCase();
+  try {
+    const originalFetch = window.fetch.bind(window);
+
+    const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+      const started = performance.now();
+      const url =
+        typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const method = (init?.method || (input as Request)?.method || "GET").toUpperCase();
+      try {
+        const res = await originalFetch(input as RequestInfo, init);
+        const durationMs = Math.round(performance.now() - started);
+        logEvent({
+          logType: "api",
+          level: res.ok ? "success" : "error",
+          statusCode: res.status,
+          durationMs,
+          message: `${method} ${res.status} ${url}`,
+          meta: { method, pathname: (() => { try { return new URL(url, window.location.href).pathname; } catch { return url; } })() },
+        });
+        return res;
+      } catch (err) {
+        logEvent({
+          logType: "api",
+          level: "error",
+          durationMs: Math.round(performance.now() - started),
+          message: `${method} FAILED ${url} — ${(err as Error)?.message ?? "network error"}`,
+          meta: { method, pathname: url },
+        });
+        throw err;
+      }
+    };
+
     try {
-      const res = await originalFetch(input as RequestInfo, init);
-      const durationMs = Math.round(performance.now() - started);
-      logEvent({
-        logType: "api",
-        level: res.ok ? "success" : "error",
-        statusCode: res.status,
-        durationMs,
-        message: `${method} ${res.status} ${url}`,
-        meta: { method, pathname: (() => { try { return new URL(url, window.location.href).pathname; } catch { return url; } })() },
+      Object.defineProperty(window, "fetch", {
+        value: apiFetch,
+        writable: true,
+        configurable: true,
       });
-      return res;
-    } catch (err) {
-      logEvent({
-        logType: "api",
-        level: "error",
-        durationMs: Math.round(performance.now() - started),
-        message: `${method} FAILED ${url} — ${(err as Error)?.message ?? "network error"}`,
-        meta: { method, pathname: url },
-      });
-      throw err;
+    } catch {
+      (window as any).fetch = apiFetch;
     }
-  };
+  } catch (err) {
+    console.warn("[logSink] Failed to patch window.fetch:", err);
+  }
 }

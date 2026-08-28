@@ -36,7 +36,7 @@ export interface ReadinessCheck {
 }
 
 export interface ReadinessDecision {
-  id: "router-mode" | "env-vars" | "app-root";
+  id: "router-mode" | "env-vars" | "app-root" | "unresolved-imports";
   label: string;
   message: string;
   options?: { value: string; label: string; recommended?: boolean }[];
@@ -54,7 +54,7 @@ export interface ReactReadinessReport {
   presentEnvVars: string[];
 }
 
-const SKIP_DIR = /(^|\/)(node_modules|dist|build|www|out|android|ios|\.git|\.next|\.nuxt|\.output|coverage)(\/|$)/;
+const SKIP_DIR = /(^|\/)(node_modules|dist|build|www|out|android|ios|\.git|\.next|\.nuxt|\.output|coverage|test|tests|__tests__|cypress|e2e)(\/|$)/;
 const SRC_EXT = /\.(m?[jt]sx?)$/i;
 const MAX_TEXT_SIZE = 500_000;
 
@@ -62,6 +62,14 @@ const NODE_BUILTINS = new Set([
   "fs", "path", "os", "http", "https", "url", "crypto", "stream", "buffer",
   "child_process", "events", "util", "zlib", "assert", "querystring", "tty",
   "readline", "net", "dgram", "dns", "cluster", "worker_threads", "process",
+  "v8", "vm", "perf_hooks", "async_hooks", "inspector", "punycode", "string_decoder", "timers", "tls",
+]);
+
+// Known dev/ambient/platform packages that should not hard-block project creation if missing
+const DEV_ONLY_OR_NATIVE_PACKAGES = new Set([
+  "vite", "@vitejs/plugin-react", "webpack", "rollup", "esbuild", "typescript",
+  "@types/node", "@types/react", "@types/react-dom",
+  "lovable-tagger", "@capacitor/cli", "tailwind-merge", "clsx"
 ]);
 
 function isSourceFile(f: FileEntry): boolean {
@@ -73,17 +81,34 @@ function isSourceFile(f: FileEntry): boolean {
 
 function extractBareImports(content: string): string[] {
   const out = new Set<string>();
-  const re = /(?:from|import)\s+['"]([^'"\n]+)['"]/g;
+  // Match standard import/export and dynamic import(...) statements
+  const re = /(?:from\s+|import\s*\(?\s*)['"]([^'"\n]+)['"]/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(content))) {
-    const spec = m[1];
+    let spec = m[1]?.trim();
     if (!spec) continue;
-    if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("@/") || spec.startsWith("~/")) continue;
-    if (spec.startsWith("http") || spec.startsWith("node:") || spec.startsWith("data:")) continue;
+    
+    // Strip bundler / URL / protocol prefixes (e.g. npm:resend@2.0.0 -> resend, jsdelivr:, esm.sh:)
+    if (spec.startsWith("npm:")) {
+      spec = spec.slice(4);
+    }
+    // Strip version pins if present in specifier (e.g. resend@2.0.0 -> resend, @supabase/supabase-js@2 -> @supabase/supabase-js)
+    if (spec.includes("@") && !spec.startsWith("@")) {
+      spec = spec.split("@")[0];
+    } else if (spec.startsWith("@") && spec.indexOf("@", 1) > 0) {
+      const atIdx = spec.indexOf("@", 1);
+      spec = spec.slice(0, atIdx);
+    }
+
+    if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("@/") || spec.startsWith("~/") || spec.startsWith("#")) continue;
+    if (spec.startsWith("http:") || spec.startsWith("https:") || spec.startsWith("node:") || spec.startsWith("data:")) continue;
+    
     // scope/name → keep scope; plain/name → strip subpath
     const parts = spec.split("/");
     const pkg = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-    if (pkg) out.add(pkg);
+    if (pkg && !pkg.startsWith(".") && !pkg.startsWith("/")) {
+      out.add(pkg);
+    }
   }
   return [...out];
 }
@@ -289,8 +314,13 @@ export function scanReactReadiness(
   const unresolved: string[] = [];
   for (const imp of allImports) {
     if (NODE_BUILTINS.has(imp)) continue;
+    if (DEV_ONLY_OR_NATIVE_PACKAGES.has(imp)) continue;
     if (declaredDeps.has(imp)) continue;
-    // Some scoped packages: check base without subpath already handled
+    // Check if parent scope is in declaredDeps (e.g., @supabase vs @supabase/supabase-js)
+    if (imp.startsWith("@")) {
+      const scope = imp.split("/")[0];
+      if (Array.from(declaredDeps).some((d) => d.startsWith(scope) || d === imp)) continue;
+    }
     unresolved.push(imp);
   }
   if (unresolved.length > 0 && pkgFile) {
@@ -300,13 +330,23 @@ export function scanReactReadiness(
     }
     checks.push({
       id: "unresolved-imports",
-      label: "Unresolved bare imports",
-      severity: "block",
-      message: `These packages are imported but not in package.json dependencies: ${unresolved.slice(0, 8).join(", ")}${unresolved.length > 8 ? ` (+${unresolved.length - 8} more)` : ""}. Install fails → blank APK.`,
-      autoFixable: false,
+      label: "Unresolved package imports",
+      severity: "warn",
+      message: `These packages are imported in source code but not declared in package.json dependencies: ${unresolved.slice(0, 8).join(", ")}${unresolved.length > 8 ? ` (+${unresolved.length - 8} more)` : ""}.`,
+      autoFixable: true,
       files: [...filesUsingUnresolved].slice(0, 10),
     });
-    hardBlockers.push(`${unresolved.length} unresolved package import(s)`);
+    needsUserDecision.push({
+      id: "unresolved-imports",
+      label: "Missing package dependencies",
+      message: `Found ${unresolved.length} undeclared dependency specifier(s): ${unresolved.slice(0, 5).join(", ")}${unresolved.length > 5 ? "..." : ""}. You can auto-install them or proceed.`,
+      options: [
+        { value: "auto-install", label: "Auto-add to package.json dependencies (recommended)", recommended: true },
+        { value: "ignore", label: "Proceed anyway (I have global or vendored modules)" },
+      ],
+      values: unresolved,
+    });
+    fixableAutomatically.push(`Auto-inject ${unresolved.length} missing package(s) into package.json dependencies`);
   }
 
   // ─── 7. SSR-only globals at module top-level ───────────────────────────

@@ -5,8 +5,18 @@ import { installLogBuffer } from "@/lib/runtime/logBuffer";
 import { installNetworkBuffer } from "@/lib/runtime/networkBuffer";
 import { installApiLogTap } from "@/lib/logs/logSink";
 
-installLogBuffer();
-installNetworkBuffer();
+try {
+  installLogBuffer();
+} catch (error) {
+  console.warn("[runtime] Log buffer initialization skipped", error);
+}
+
+try {
+  installNetworkBuffer();
+} catch (error) {
+  console.warn("[runtime] Network buffer initialization skipped", error);
+}
+
 try {
   installApiLogTap();
 } catch (error) {

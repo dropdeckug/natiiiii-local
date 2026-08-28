@@ -711,11 +711,23 @@ export function detectServerSide(
 
   const serverFile = files.find((f) => /\.(php|asp|aspx|jsp|erb|cshtml)$/i.test(f.path));
   if (serverFile) {
-    flags.push({
-      reason: `Server template files found (${serverFile.path}).`,
-      remedy: "Native apps cannot execute server templates. Upload the rendered static output instead.",
-      file: serverFile.path,
-    });
+    const hasFrontend =
+      framework !== "unknown" ||
+      has(files, (p) => p.includes("package.json") || p.includes("vite.config") || /resources\/js/i.test(p));
+
+    if (hasFrontend) {
+      flags.push({
+        reason: `Server files found (${serverFile.path}).`,
+        remedy: "CPR will decouple the frontend into a self-contained SPA with an internal dev server.",
+        file: serverFile.path,
+      });
+    } else {
+      flags.push({
+        reason: `Server template files found (${serverFile.path}).`,
+        remedy: "Native apps cannot execute server templates. Upload the rendered static output instead.",
+        file: serverFile.path,
+      });
+    }
   }
   return flags;
 }
