@@ -4,8 +4,9 @@ import capacitorIcon from "@/assets/icons/capacitor.svg";
 import ionicIcon from "@/assets/icons/ionic.svg";
 import chromeIcon from "@/assets/icons/chrome.svg";
 import electronIcon from "@/assets/icons/electron.png";
+import tauriIcon from "@/assets/icons/tauri.svg";
 
-export type EngineType = "webview" | "capacitor" | "ionic" | "twa" | "electron";
+export type EngineType = "webview" | "capacitor" | "ionic" | "twa" | "electron" | "tauri";
 
 interface Engine {
   id: EngineType;
@@ -62,6 +63,15 @@ const engines: Engine[] = [
     bestFor: "Desktop apps from web projects",
     pros: ["Cross-platform desktop", "Full Node.js access", "Native menus & tray"],
     cons: ["Large binary size", "Higher memory usage"],
+  },
+  {
+    id: "tauri",
+    name: "Tauri",
+    icon: tauriIcon,
+    tagline: "Lightweight Rust desktop app",
+    bestFor: "Small, fast cross-platform apps",
+    pros: ["Extremely small binary", "Low memory footprint", "Rust security"],
+    cons: ["Rust dependencies", "Different webviews per OS"],
   },
 ];
 

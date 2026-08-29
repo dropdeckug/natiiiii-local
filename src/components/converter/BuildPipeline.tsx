@@ -425,7 +425,7 @@ const BuildPipeline = ({
               base64 = btoa(binary);
             }
 
-            const { data, error } = await supabase.functions.invoke("build-desktop", {
+            const { data, error } = await supabase.functions.invoke(`build-desktop-${engine === "electron" ? "electron" : "tauri"}`, {
               body: {
                 action: "start",
                 projectZip: base64,
@@ -463,7 +463,7 @@ const BuildPipeline = ({
                 await delay(pollCount < 5 ? 5000 : 10000);
                 pollCount++;
 
-                const { data: statusData } = await supabase.functions.invoke("build-desktop", {
+                const { data: statusData } = await supabase.functions.invoke(`build-desktop-${engine === "electron" ? "electron" : "tauri"}`, {
                   body: { action: "status", repoName, runId },
                 });
                 if (statusData?.runId && !runId) runId = statusData.runId;
@@ -477,7 +477,7 @@ const BuildPipeline = ({
                   // Download artifacts
                   addLog("> Downloading artifacts...");
                   try {
-                    const { data: dlData } = await supabase.functions.invoke("build-desktop", {
+                    const { data: dlData } = await supabase.functions.invoke(`build-desktop-${engine === "electron" ? "electron" : "tauri"}`, {
                       body: { action: "download", repoName, runId },
                     });
                     if (dlData?.artifactBase64) {
@@ -494,7 +494,7 @@ const BuildPipeline = ({
 
                   // Cleanup
                   try {
-                    await supabase.functions.invoke("build-desktop", { body: { action: "delete-repo", repoName } });
+                    await supabase.functions.invoke(`build-desktop-${engine === "electron" ? "electron" : "tauri"}`, { body: { action: "delete-repo", repoName } });
                     addLog("> ✓ Build repository cleaned up");
                   } catch {}
 

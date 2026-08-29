@@ -29,7 +29,15 @@ export function packageFromSpecifier(spec: string): string | null {
   if (/^[./]|^node:|^virtual:|^data:|^https?:|^@\/|^~\//.test(spec)) return null;
   const parts = spec.split("/");
   const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-  return name || null;
+  if (!name || name.length > 214) return null;
+  
+  // Strict npm package name validation
+  // Cannot contain spaces, uppercase letters, or special chars like brackets/quotes
+  if (!/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(name)) {
+    return null;
+  }
+  
+  return name;
 }
 
 /** Extract the first unresolved package name from build error output. */

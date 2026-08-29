@@ -724,7 +724,7 @@ const CreateFlow = () => {
               {metadata.engineReason && <span className="text-xs text-muted-foreground">— {metadata.engineReason}</span>}
             </div>
             <div className="flex gap-2 flex-wrap">
-              {(["webview", "capacitor", "twa", "ionic", "electron"] as EngineType[]).map((e) => (
+              {(["webview", "capacitor", "twa", "ionic", "electron", "tauri"] as EngineType[]).map((e) => (
                 <button key={e} onClick={() => setEngine(e)}
                   className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${engine === e ? "bg-primary/15 text-primary border border-primary/30" : "bg-muted/40 text-muted-foreground border border-transparent hover:border-border"}`}>
                   {e.charAt(0).toUpperCase() + e.slice(1)}

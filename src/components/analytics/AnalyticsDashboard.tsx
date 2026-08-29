@@ -89,7 +89,7 @@ const AnalyticsDashboard = () => {
 };
 
 function generateDemoData(): BuildJob[] {
-  const engines = ["capacitor", "ionic", "twa", "electron", "webview"];
+  const engines = ["capacitor", "ionic", "twa", "electron", "tauri", "webview"];
   const statuses: BuildJob["status"][] = ["success", "failure", "building", "queued"];
   const names = ["EarlyMarket", "SK Sure Wins", "Portfolio", "GameHub", "TaskFlow", "ShopNow", "FitTrack", "NewsApp"];
   const demo: BuildJob[] = [];

@@ -137,7 +137,7 @@ const GeneralSettings = () => {
             onChange={(e) => setEngine(e.target.value)}
             className="h-8 w-full rounded-md border border-input bg-background px-2 text-sm"
           >
-            {["capacitor", "ionic", "twa", "webview", "electron"].map((e) => (
+            {["capacitor", "ionic", "twa", "webview", "electron", "tauri"].map((e) => (
               <option key={e} value={e}>{e}</option>
             ))}
           </select>
