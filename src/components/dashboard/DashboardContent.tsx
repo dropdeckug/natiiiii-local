@@ -32,6 +32,8 @@ const OverviewContent = lazy(() => import("@/components/dashboard/OverviewConten
 const SettingsPanel = lazy(() => import("@/components/dashboard/SettingsPanel"));
 const DeveloperPanel = lazy(() => import("@/components/dashboard/DeveloperPanel"));
 const InstallPanel = lazy(() => import("@/components/dashboard/InstallPanel"));
+const ConfigurationPanel = lazy(() => import("@/components/dashboard/ConfigurationPanel"));
+const NetworkingPanel = lazy(() => import("@/components/dashboard/NetworkingPanel"));
 const LogsExplorer = lazy(() => import("@/components/logs/LogsExplorer"));
 
 
@@ -115,7 +117,7 @@ const DashboardContent = ({ section, activeItem }: DashboardContentProps) => {
   }
 
   if (section === "config") {
-    return <Placeholder icon={Settings} title="Configuration" description="Configure your app settings, Capacitor config, and environment variables." />;
+    return <Suspense fallback={<Fallback />}><ConfigurationPanel /></Suspense>;
   }
 
   if (section === "appearance") {
@@ -132,7 +134,7 @@ const DashboardContent = ({ section, activeItem }: DashboardContentProps) => {
 
 
   if (section === "networking") {
-    return <Placeholder icon={Globe} title="Networking" description="Set up deep links, custom domains, and Android App Links." />;
+    return <Suspense fallback={<Fallback />}><NetworkingPanel /></Suspense>;
   }
 
   if (section === "logs") {
