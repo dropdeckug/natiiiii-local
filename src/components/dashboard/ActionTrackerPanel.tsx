@@ -32,7 +32,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import AiMark from "@/components/ai/AiMark";
 import DiffViewer from "@/components/dashboard/DiffViewer";
 import ModelIcon from "@/components/ai/ModelIcon";
-import MaterialWavySpinner from "@/components/ai/MaterialWavySpinner";
+import AgentOrb from "@/components/ai/AgentOrb";
 import {
   CommandBox,
   EditLine,
@@ -780,7 +780,7 @@ const ActionTrackerPanel = ({
         />
         {thinkingCaption && (
           <div className="mt-2 flex items-center gap-2 px-1 py-1">
-            <MaterialWavySpinner size="sm"><AiMark size={10} /></MaterialWavySpinner>
+            <AgentOrb hint={thinkingCaption} size={20} className="shrink-0 w-4 h-4" />
             <span className="text-[11px] shimmer-text font-medium truncate">{thinkingCaption}</span>
           </div>
         )}

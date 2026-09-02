@@ -31,6 +31,10 @@ import BuildPipeline from "@/components/converter/BuildPipeline";
 import AIActivityFeed, { type ActivityAction } from "@/components/create/AIActivityFeed";
 import GitHubImport from "@/components/create/GitHubImport";
 import PluginSecretsForm from "@/components/create/PluginSecretsForm";
+import AIRepairStep, { type RepairOutcome } from "@/components/create/AIRepairStep";
+import { scanProject, type ProjectScanResult } from "@/lib/tools/projectScanner";
+import { scanReactReadiness, type ReactReadinessReport } from "@/lib/tools/reactReadinessScan";
+import { collectFindings } from "@/lib/repair/readinessAgent";
 import androidIcon from "@/assets/platforms/android.svg";
 import appleIcon from "@/assets/platforms/apple.svg";
 import windowsIcon from "@/assets/platforms/windows.svg";
@@ -39,7 +43,7 @@ import macosIcon from "@/assets/platforms/macos.svg";
 
 const ANALYZE_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/analyze-with-ai`;
 
-type Phase = "drop" | "analyzing" | "confirm" | "review";
+type Phase = "drop" | "analyzing" | "repair" | "confirm" | "review";
 type OutputMode = "apk" | "project" | "ios" | "desktop";
 type DesktopPlatform = "windows" | "macos" | "linux";
 
@@ -73,6 +77,12 @@ const CreateFlow = () => {
   const [aiChatContent, setAiChatContent] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [analysisComplete, setAnalysisComplete] = useState(false);
+
+  /* Conflict repair — when the readiness scan finds blockers/conflicts the AI
+     runs in the Copilot timeline and patches the tree before the project is created. */
+  const [repairScan, setRepairScan] = useState<ProjectScanResult | null>(null);
+  const [repairReadiness, setRepairReadiness] = useState<ReactReadinessReport | null>(null);
+  const [repairOutcome, setRepairOutcome] = useState<RepairOutcome | null>(null);
 
   const [activityActions, setActivityActions] = useState<ActivityAction[]>([]);
 
@@ -349,6 +359,30 @@ const CreateFlow = () => {
     setPhase("review");
   };
 
+  /**
+   * Gate between analysis and confirmation: run the deterministic readiness
+   * scan and, if it finds conflicts, hand the project to the repair agent
+   * instead of carrying a broken tree into the build.
+   */
+  const handleAnalysisNext = useCallback(() => {
+    try {
+      const flat = flattenProjectFiles(useProjectStore.getState().files) as any[];
+      const scan = scanProject(flat);
+      const readiness = scan.framework === "react" || scan.hasPackageJson ? scanReactReadiness(flat, scan) : null;
+      const findings = collectFindings(scan, readiness);
+      if (findings.length > 0) {
+        setRepairScan(scan);
+        setRepairReadiness(readiness);
+        setRepairOutcome(null);
+        setPhase("repair");
+        return;
+      }
+    } catch (e) {
+      console.error("Readiness scan failed:", e);
+    }
+    setPhase("confirm");
+  }, []);
+
   const handleBuild = () => {
     const errors: string[] = [];
     if (!appName.trim()) errors.push("App name is required");
@@ -503,7 +537,7 @@ const CreateFlow = () => {
           <span className="text-sm font-semibold text-foreground">ForgeAI</span>
           {isStreaming && <span className="ml-auto text-[11px] shimmer-text font-medium">analyzing...</span>}
           {analysisComplete && !isStreaming && (
-            <Button size="sm" className="ml-auto gap-1.5 animate-fade-in" onClick={handleConfirmAndProceed}>
+            <Button size="sm" className="ml-auto gap-1.5 animate-fade-in" onClick={handleAnalysisNext}>
               Next <ArrowRight size={14} />
             </Button>
           )}
@@ -578,6 +612,47 @@ const CreateFlow = () => {
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ─── REPAIR PHASE (AI resolves conflicts in the timeline) ──────
+  if (phase === "repair" && repairScan) {
+    return (
+      <div className="h-screen flex flex-col animate-fade-in">
+        <div className="shrink-0 px-4 py-3 flex items-center gap-3 bg-background/80 backdrop-blur-md">
+          <button onClick={() => setPhase("analyzing")} className="p-1 rounded-full hover:bg-muted transition-colors">
+            <ArrowLeft size={16} className="text-muted-foreground" />
+          </button>
+          <div>
+            <div className="text-sm font-semibold text-foreground">Resolving conflicts</div>
+            <p className="text-[11px] text-muted-foreground">
+              The agent is patching your project so it compiles on our runners — you don't need to fix anything.
+            </p>
+          </div>
+          <Button
+            size="sm"
+            className="ml-auto gap-1.5"
+            variant={repairOutcome?.clean ? "default" : "outline"}
+            onClick={() => setPhase("confirm")}
+          >
+            {repairOutcome?.clean ? "Continue" : "Continue anyway"} <ArrowRight size={14} />
+          </Button>
+        </div>
+        <div className="flex-1 overflow-y-auto px-4 pb-6">
+          <div className="max-w-3xl mx-auto">
+            <AIRepairStep
+              scan={repairScan}
+              readiness={repairReadiness}
+              entry={repairScan.entryCandidates?.[0] ?? null}
+              appRoot={repairScan.entryCandidates?.[0]?.projectRoot ?? ""}
+              buildCommand={metadata?.buildCommand || repairScan.buildScript || "npm run build"}
+              outputDir={metadata?.outputDir || repairScan.outputDir || "dist"}
+              engine={engine}
+              onOutcome={setRepairOutcome}
+            />
           </div>
         </div>
       </div>

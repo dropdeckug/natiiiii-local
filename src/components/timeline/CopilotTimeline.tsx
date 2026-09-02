@@ -12,6 +12,7 @@
  */
 
 import { useState, type ReactNode } from "react";
+import AgentOrb from "@/components/ai/AgentOrb";
 import {
   Check,
   ChevronDown,
@@ -19,7 +20,6 @@ import {
   Copy,
   FileCode,
   Folder,
-  Loader2,
   Pencil,
   Play,
   Search,
@@ -95,9 +95,9 @@ export const DiffStat = ({ added, removed }: { added?: number; removed?: number 
 
 export type ToolStatus = "active" | "done" | "error" | "pending";
 
-const StatusGlyph = ({ status }: { status: ToolStatus }) =>
+const StatusGlyph = ({ status, hint }: { status: ToolStatus; hint?: string }) =>
   status === "active" ? (
-    <Loader2 size={11} className="animate-spin text-muted-foreground" />
+    <AgentOrb hint={hint} size={20} className="w-[13px] h-[13px]" />
   ) : status === "error" ? (
     <X size={11} className="text-destructive" strokeWidth={2.5} />
   ) : status === "done" ? (
@@ -135,7 +135,7 @@ export const ToolLine = ({
   <div className="py-[3px]">
     <div className="flex items-start gap-2 text-[12px]">
       <span className="shrink-0 mt-[3px] w-[13px] h-[13px] flex items-center justify-center text-muted-foreground/70">
-        {icon ?? <StatusGlyph status={status} />}
+        {icon ?? <StatusGlyph status={status} hint={verb} />}
       </span>
       <div className="min-w-0 flex-1">
         <button
@@ -221,7 +221,7 @@ export const EditLine = ({
       <div className="flex items-start gap-2 text-[12px]">
         <span className="shrink-0 mt-[3px] w-[13px] h-[13px] flex items-center justify-center">
           {status === "active" ? (
-            <Loader2 size={11} className="animate-spin text-muted-foreground" />
+            <AgentOrb state="composing" size={20} className="w-[13px] h-[13px]" />
           ) : (
             <Pencil size={11} className="text-muted-foreground/60" />
           )}
@@ -317,7 +317,7 @@ export const CommandBox = ({
       <div className="flex items-start gap-2 text-[12px] mb-1">
         <span className="shrink-0 mt-[3px] w-[13px] h-[13px] flex items-center justify-center">
           {status === "active" ? (
-            <Loader2 size={11} className="animate-spin text-muted-foreground" />
+            <AgentOrb hint={command} kind="command" size={20} className="w-[13px] h-[13px]" />
           ) : status === "error" ? (
             <X size={11} className="text-destructive" strokeWidth={2.5} />
           ) : (
@@ -419,7 +419,7 @@ export const TimelineGroup = ({
         className="w-full text-left flex items-center gap-1.5 text-[12px]"
       >
         {status === "active" ? (
-          <Loader2 size={11} className="shrink-0 animate-spin text-muted-foreground" />
+          <AgentOrb state="weaving" size={20} className="shrink-0 w-[13px] h-[13px]" />
         ) : status === "error" ? (
           <X size={11} className="shrink-0 text-destructive" strokeWidth={2.5} />
         ) : null}

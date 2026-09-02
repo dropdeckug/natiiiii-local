@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
-import AiMark from "@/components/ai/AiMark";
-import MaterialWavySpinner from "@/components/ai/MaterialWavySpinner";
+import AgentOrb, { orbStateForKind, inferOrbState } from "@/components/ai/AgentOrb";
 import {
   CommandBox,
   EditLine,
@@ -151,7 +150,21 @@ interface ChatTimelineProps {
   caption?: string | null;
 }
 
+const kindToAction = (kind: Kind) =>
+  kind === "narration"
+    ? ("thinking" as const)
+    : kind === "command"
+    ? ("command" as const)
+    : kind === "edit"
+    ? ("edit" as const)
+    : kind === "search"
+    ? ("search" as const)
+    : kind === "read"
+    ? ("read" as const)
+    : ("generic" as const);
+
 const ChatTimeline = ({ steps, caption }: ChatTimelineProps) => {
+  const activeStep = steps.find((s) => s.status === "active") || steps[steps.length - 1];
   if (steps.length === 0 && !caption) return null;
 
   // Completed lookups/reads collapse behind a single summary row (Copilot style);
@@ -173,9 +186,14 @@ const ChatTimeline = ({ steps, caption }: ChatTimelineProps) => {
     <div className="my-1">
       {caption && (
         <div className="flex items-center gap-2 py-1">
-          <MaterialWavySpinner size="sm">
-            <AiMark size={10} />
-          </MaterialWavySpinner>
+          <AgentOrb
+            state={inferOrbState(
+              `${activeStep?.tool || ""} ${activeStep?.command || ""} ${activeStep?.title || ""} ${caption}`,
+              activeStep ? orbStateForKind(kindToAction(classify(activeStep))) : "breathing",
+            )}
+            size={20}
+            className="shrink-0 w-4 h-4"
+          />
           <span className="ai-thinking-shimmer text-[12.5px] font-medium">{caption}</span>
         </div>
       )}
