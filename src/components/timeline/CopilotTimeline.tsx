@@ -387,6 +387,151 @@ export const CommandBox = ({
 /* ─────────────────────── collapsible group ─────────────────────── */
 
 /**
+ * Visual card for Runner-Executed AI Repair Loop attempts
+ */
+export const RepairLoopCard = ({
+  attempt,
+  maxAttempts = 3,
+  status,
+  diagnosisType,
+  rootCause,
+  evidence,
+  source,
+  model,
+  commands,
+  results,
+  notes,
+  defaultOpen = true,
+}: {
+  attempt: number;
+  maxAttempts?: number;
+  status: "diagnosing" | "executing" | "succeeded" | "failed" | "exhausted";
+  diagnosisType?: string;
+  rootCause?: string;
+  evidence?: string[];
+  source?: "deterministic" | "model" | "fallback";
+  model?: string | null;
+  commands?: { cmd: string; name?: string; critical?: boolean }[];
+  results?: { cmd: string; exitCode: number; ms?: number; tail?: string }[];
+  notes?: string;
+  defaultOpen?: boolean;
+}) => {
+  const [open, setOpen] = useState(defaultOpen);
+
+  const isSuccess = status === "succeeded";
+  const isExhausted = status === "exhausted" || status === "failed";
+  const isActive = status === "diagnosing" || status === "executing";
+
+  return (
+    <div className="my-2 rounded-md border border-border bg-card/60 overflow-hidden text-[12px]">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-2 text-left bg-muted/20 hover:bg-muted/30 transition-colors"
+      >
+        <div className="flex items-center gap-2 min-w-0">
+          {isActive ? (
+            <AgentOrb state="weaving" size={16} className="shrink-0 w-3.5 h-3.5" />
+          ) : isSuccess ? (
+            <Check size={13} className="shrink-0 text-[hsl(var(--success))]" strokeWidth={2.5} />
+          ) : (
+            <X size={13} className="shrink-0 text-destructive" strokeWidth={2.5} />
+          )}
+          <span className="font-medium text-foreground/90">
+            Runner AI Repair · Attempt {attempt}/{maxAttempts}
+          </span>
+          {diagnosisType && (
+            <span className="px-1.5 py-0.5 rounded font-mono text-[10px] bg-muted text-muted-foreground border border-border">
+              {diagnosisType}
+            </span>
+          )}
+          {source && (
+            <span className="text-[11px] text-muted-foreground/70">
+              via {source}{model ? ` (${model})` : ""}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span
+            className={`text-[11px] font-medium ${
+              isSuccess
+                ? "text-[hsl(var(--success))]"
+                : isExhausted
+                ? "text-destructive"
+                : "text-primary"
+            }`}
+          >
+            {status}
+          </span>
+          {open ? <ChevronDown size={13} className="text-muted-foreground" /> : <ChevronRight size={13} />}
+        </div>
+      </button>
+
+      {open && (
+        <div className="p-3 space-y-2 border-t border-border">
+          {rootCause && (
+            <div>
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-0.5">
+                Root Cause
+              </span>
+              <p className="text-foreground/90 leading-relaxed font-sans">{rootCause}</p>
+            </div>
+          )}
+
+          {evidence && evidence.length > 0 && (
+            <div>
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-0.5">
+                Evidence
+              </span>
+              <div className="space-y-1">
+                {evidence.map((ev, i) => (
+                  <div
+                    key={i}
+                    className="font-mono text-[11px] text-muted-foreground bg-muted/30 px-2 py-1 rounded border border-border/50 break-all"
+                  >
+                    {ev}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {commands && commands.length > 0 && (
+            <div>
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wider block mb-1">
+                Executed Commands
+              </span>
+              <div className="space-y-1.5">
+                {commands.map((cmd, i) => {
+                  const res = results?.find((r) => r.cmd === cmd.cmd);
+                  return (
+                    <CommandBox
+                      key={i}
+                      command={cmd.cmd}
+                      status={res ? (res.exitCode === 0 ? "done" : "error") : isActive ? "active" : "done"}
+                      exitCode={res?.exitCode}
+                      output={res?.tail}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {notes && (
+            <p className="text-[11px] text-muted-foreground/80 italic pt-1 border-t border-border/40">
+              {notes}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
+/* ─────────────────────── collapsible group ─────────────────────── */
+
+/**
  * A collapsible summary row with a hairline rule down the left of its children,
  * mirroring "Searched for regex patterns and reviewed multiple files ⌄" and
  * "Finished with 2 steps +128 -1 ⌄" in the Copilot transcript.

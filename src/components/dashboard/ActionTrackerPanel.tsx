@@ -39,6 +39,7 @@ import {
   Narration,
   ToolLine,
   TimelineGroup,
+  RepairLoopCard,
 } from "@/components/timeline/CopilotTimeline";
 
 import type { PhaseGroupData } from "@/hooks/useOrchestratorFeed";
@@ -727,12 +728,13 @@ const ActionTrackerPanel = ({
   modelId,
 }: ActionTrackerPanelProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const repairAttempts = useBuildStore((s) => s.repairAttempts);
 
   useEffect(() => {
     if (containerRef.current) {
       containerRef.current.scrollTop = containerRef.current.scrollHeight;
     }
-  }, [phaseGroups, actions, ciSteps, aiTimeline, thinkingCaption]);
+  }, [phaseGroups, actions, ciSteps, aiTimeline, thinkingCaption, repairAttempts]);
 
   const hasGroupedPipeline = useMemo(
     () => Boolean(phaseGroups && phaseGroups.length > 0 && phaseGroups.some((g) => g.actions.length > 0 || g.status !== "pending")),
@@ -789,6 +791,27 @@ const ActionTrackerPanel = ({
       <ScrollArea className="h-full" ref={containerRef}>
         <PendingChangesPanel pendingChanges={pendingChanges} />
         <GitHubRunnerTimeline ciSteps={ciSteps} />
+
+        {repairAttempts.length > 0 && (
+          <div className="px-4 pt-2">
+            {repairAttempts.map((att) => (
+              <RepairLoopCard
+                key={att.attempt}
+                attempt={att.attempt}
+                maxAttempts={att.maxAttempts}
+                status={att.status}
+                diagnosisType={att.diagnosisType}
+                rootCause={att.rootCause}
+                evidence={att.evidence}
+                source={att.source}
+                model={att.model}
+                commands={att.commands}
+                results={att.results}
+                notes={att.notes}
+              />
+            ))}
+          </div>
+        )}
 
         {aiTimeline.length > 0 && (
           <div className="px-4 pt-3">

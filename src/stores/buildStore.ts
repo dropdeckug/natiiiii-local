@@ -52,6 +52,28 @@ export interface CiStep {
   logExcerpt?: string;
 }
 
+export interface RepairCommandResult {
+  cmd: string;
+  exitCode: number;
+  ms?: number;
+  tail?: string;
+}
+
+export interface RepairAttemptInfo {
+  attempt: number;
+  maxAttempts: number;
+  status: "diagnosing" | "executing" | "succeeded" | "failed" | "exhausted";
+  diagnosisType?: string;
+  rootCause?: string;
+  evidence?: string[];
+  source?: "deterministic" | "model" | "fallback";
+  model?: string | null;
+  commands?: { cmd: string; name: string; critical: boolean }[];
+  results?: RepairCommandResult[];
+  notes?: string;
+  timestamp: number;
+}
+
 export interface AiTimelineEvent {
   id: string;
   op: "read" | "search" | "edit" | "thinking" | "config" | "command" | "narration";
@@ -96,6 +118,8 @@ interface BuildStore {
   phase1RepoName: string | null;
   /** Live timeline events from the AI wiring agent (reads, searches, edits) */
   aiTimeline: AiTimelineEvent[];
+  /** Repair attempts executed on the runner or received via live telemetry. */
+  repairAttempts: RepairAttemptInfo[];
   /** Current macro-phase the platform is executing. */
   buildButtonState:
     | "idle"
@@ -132,6 +156,9 @@ interface BuildStore {
   completeAiEvent: (id: string, status?: "done" | "error") => void;
   updateAiEvent: (id: string, updates: Partial<AiTimelineEvent>) => void;
   clearAiTimeline: () => void;
+  setRepairAttempts: (attempts: RepairAttemptInfo[]) => void;
+  addOrUpdateRepairAttempt: (attempt: RepairAttemptInfo) => void;
+  clearRepairAttempts: () => void;
   clearBuildProgress: () => void;
 }
 
@@ -146,6 +173,7 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
   thinkingCaption: null,
   phase1RepoName: null,
   aiTimeline: [],
+  repairAttempts: [],
   buildButtonState: "idle",
   activePlatform: "android",
   setActivePlatform: (p) => set({ activePlatform: p }),
@@ -162,6 +190,7 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
       thinkingCaption: null,
       phase1RepoName: null,
       aiTimeline: [],
+      repairAttempts: [],
       buildButtonState: "idle",
     });
   },
@@ -225,6 +254,18 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
       aiTimeline: s.aiTimeline.map((e) => (e.id === id ? { ...e, ...updates } : e)),
     })),
   clearAiTimeline: () => set({ aiTimeline: [] }),
+  setRepairAttempts: (attempts) => set({ repairAttempts: attempts }),
+  addOrUpdateRepairAttempt: (attempt) =>
+    set((s) => {
+      const idx = s.repairAttempts.findIndex((a) => a.attempt === attempt.attempt);
+      if (idx === -1) {
+        return { repairAttempts: [...s.repairAttempts, attempt] };
+      }
+      const next = [...s.repairAttempts];
+      next[idx] = { ...next[idx], ...attempt };
+      return { repairAttempts: next };
+    }),
+  clearRepairAttempts: () => set({ repairAttempts: [] }),
   clearBuildProgress: () =>
     set({
       activePhaseGroups: [],
@@ -233,6 +274,7 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
       isBuildActive: false,
       thinkingCaption: null,
       aiTimeline: [],
+      repairAttempts: [],
       buildButtonState: "idle",
     }),
 }));

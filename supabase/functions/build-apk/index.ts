@@ -3,6 +3,7 @@ import { PLATFORM_RELEASE } from "../_shared/platformRelease.ts";
 import { BUILD_INTEGRITY_JS, BUILD_RETRY_JS, PEER_AUDIT_JS } from "../_shared/cprRunnerScripts.ts";
 import { POST_INSTALL_JS } from "../_shared/cprPostInstall.ts";
 import { RESILIENCE_RUNNER_JS } from "../_shared/resilienceRunner.ts";
+import { REPAIR_EXECUTOR_JS } from "../_shared/repairPlanContract.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -461,6 +462,13 @@ function classifyFailedStep(stepName: string, logExcerpt: string): StepClassific
   if (lowerStep.includes("extract source") || lowerStep.includes("checkout") || lowerStep.includes("clone")) {
     return { category: "Source Extraction", detail: `Source code extraction/checkout failed at step: ${stepName}`, suggestedFix: "Check that the ZIP file contains a valid project with package.json." };
   }
+  if (lowerStep.includes("ai dependency repair loop") || lowerStep.includes("ai repair loop") || lowerLog.includes("nb_repair_exhausted") || lowerLog.includes("ai repair exhausted")) {
+    return {
+      category: "Runner Repair Exhausted",
+      detail: "Runner-executed AI repair loop exhausted all retry attempts without a passing install.",
+      suggestedFix: "Review the cpr-dependency-diagnostics artifact (repair-plan.json, repair-execution.log) for conflicting packages and resolve in package.json.",
+    };
+  }
   if (lowerStep.includes("install dep") || lowerStep.includes("npm install")) {
     if (lowerLog.includes("eresolve") || lowerLog.includes("peer dep")) {
       return { category: "Dependency Conflict", detail: "npm peer dependency conflict during install", suggestedFix: "Check package.json for conflicting peer dependencies. Try removing lock files." };
@@ -610,16 +618,54 @@ function webDirReconcileStep(label = "Reconcile web output directory"): string {
 }
 
 
-function depDoctorStep(label: string): string {
-  // Deliberately non-mutating. Registry probes cannot distinguish a missing
-  // public package from a private package, registry outage, or auth failure.
+function depDoctorStep(label = "CPR · Dependency contract probe"): string {
   return `      - name: "${label}"
-        run: echo "Dependency manifest preserved; package manager will report exact resolution errors."
+        run: |
+          node -e "
+const fs = require('fs');
+const lines = [];
+lines.push('=== CPR Dependency Contract Probe ===');
+lines.push('Date: ' + new Date().toISOString());
+lines.push('Working directory: ' + process.cwd());
+
+let pkg = null;
+if (!fs.existsSync('package.json')) {
+  lines.push('package.json: MISSING');
+} else {
+  try {
+    pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+    lines.push('package.json: VALID (' + Object.keys(pkg.dependencies || {}).length + ' deps, ' + Object.keys(pkg.devDependencies || {}).length + ' devDeps)');
+    if (pkg.engines) lines.push('declared engines: ' + JSON.stringify(pkg.engines));
+    const invalidSpecifiers = [];
+    const all = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+    for (const [k, v] of Object.entries(all)) {
+      if (typeof v === 'string' && (v.includes('file:') || v.includes('link:') || v.startsWith('portal:'))) {
+        invalidSpecifiers.push(k + '@' + v);
+      }
+    }
+    if (invalidSpecifiers.length > 0) {
+      lines.push('local/protocol specifiers: ' + invalidSpecifiers.join(', '));
+    }
+  } catch (e) {
+    lines.push('package.json: INVALID JSON (' + e.message + ')');
+  }
+}
+
+const lockfiles = ['package-lock.json', 'npm-shrinkwrap.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lockb', 'bun.lock'];
+const foundLocks = lockfiles.filter(f => fs.existsSync(f));
+lines.push('lockfiles found: ' + (foundLocks.length ? foundLocks.join(', ') : 'none'));
+if (foundLocks.length > 1) {
+  lines.push('warning: multiple lockfiles detected (' + foundLocks.join(', ') + ') - potential conflict');
+}
+fs.writeFileSync('cpr-dependency-contract.log', lines.join('\\n') + '\\n');
+console.log(lines.join('\\n'));
+"
 `;
 }
 
 function smartInstallStep(label: string, _extraArgs = ""): string {
   return `      - name: "${label}"
+        continue-on-error: true
         run: |
           set -o pipefail
           echo "[cpr] release=\${NB_CPR_RELEASE:-legacy} lockfile-policy=\${NB_LOCKFILE_POLICY:-regenerate}"
@@ -657,7 +703,30 @@ function smartInstallStep(label: string, _extraArgs = ""): string {
           else
             npm install --no-audit --no-fund 2>&1 | tee dependency-install.log
           fi
-${peerAuditStep(`${label} · peer dependency audit`)}${postInstallStep(`${label} · post-install verification`)}`;
+          NB_INSTALL_EXIT=$?
+          echo "NB_INSTALL_EXIT=$NB_INSTALL_EXIT" >> $GITHUB_ENV
+          test -s dependency-install.log || echo "Install exited with code $NB_INSTALL_EXIT" > dependency-install.log
+          exit $NB_INSTALL_EXIT
+`;
+}
+
+function aiRepairLoopStep(label = "Phase 1 - AI dependency repair loop", phase = "phase1"): string {
+  const b64 = utf8ToBase64(REPAIR_EXECUTOR_JS);
+  return `      - name: "${label}"
+        if: env.NB_INSTALL_EXIT != '0'
+        env:
+          NB_REPAIR_ENDPOINT: "\${{ env.NB_REPAIR_ENDPOINT }}"
+          NB_CALLBACK_SECRET: "\${{ env.NB_CALLBACK_SECRET }}"
+          NB_SUPABASE_ANON_KEY: "\${{ env.NB_SUPABASE_ANON_KEY }}"
+          NB_PROJECT_ID: "\${{ env.NB_PROJECT_ID }}"
+          NB_BUILD_ID: "\${{ env.NB_BUILD_ID }}"
+          NB_REPAIR_PHASE: "${phase}"
+          NB_PACKAGE_MANAGER: "\${{ env.NB_PACKAGE_MANAGER || 'npm' }}"
+          NB_REPAIR_MAX_ATTEMPTS: "3"
+        run: |
+          echo '${b64}' | base64 -d > /tmp/nb-repair-executor.cjs
+          node /tmp/nb-repair-executor.cjs
+`;
 }
 
 /**
@@ -736,6 +805,8 @@ interface CallbackCfg {
   secret?: string;
   buildId?: string;
   projectId?: string;
+  anonKey?: string;
+  repairEndpoint?: string;
 }
 
 /** Env block injected into every resilience-aware workflow. */
@@ -743,11 +814,14 @@ interface CallbackCfg {
 function callbackCfgFor(body: BuildRequest): CallbackCfg {
   const base = Deno.env.get("SUPABASE_URL");
   const secret = Deno.env.get("NB_CALLBACK_SECRET") ?? "";
+  const anonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
   return {
     url: base ? `${base}/functions/v1/build-callback` : "",
     secret,
     buildId: body.buildId ?? "",
     projectId: body.projectId ?? "",
+    anonKey,
+    repairEndpoint: base ? `${base}/functions/v1/ai-repair-plan` : "",
   };
 }
 
@@ -756,6 +830,8 @@ function resilienceEnv(cb: CallbackCfg): string {
   NB_CALLBACK_SECRET: "${sanitizeForYaml(cb.secret ?? "")}"
   NB_BUILD_ID: "${sanitizeForYaml(cb.buildId ?? "")}"
   NB_PROJECT_ID: "${sanitizeForYaml(cb.projectId ?? "")}"
+  NB_SUPABASE_ANON_KEY: "${sanitizeForYaml(cb.anonKey ?? "")}"
+  NB_REPAIR_ENDPOINT: "${sanitizeForYaml(cb.repairEndpoint ?? "")}"
   NB_NODE_TS_VERSION: "5.6.3"
 `;
 }
@@ -1543,7 +1619,7 @@ ${resilienceResultSteps()}# build-nonce: ${nonce}
 /**
  * Phase 1 Setup Workflow — installs deps, Capacitor + plugins, caches.
  */
-function getSetupWorkflow(appName: string, packageName: string, plugins: string[], webDirHint: string = "", defaultBranch: string = "main", cpr: CprHints = {}): string {
+function getSetupWorkflow(appName: string, packageName: string, plugins: string[], webDirHint: string = "", defaultBranch: string = "main", cpr: CprHints = {}, cb: CallbackCfg = {}): string {
   const safeWebDir = sanitizeWebDir(webDirHint || cpr.outputDir || "");
   const safeWebDirCandidates = [...new Set([webDirHint, cpr.outputDir, ...(cpr.outputCandidates ?? [])].map((d) => sanitizeWebDir(d)).filter(Boolean))].join(",");
   const nodeVersion = sanitizeNodeVersion(cpr.requiredNodeVersion || cpr.nodeVersion);
@@ -1572,7 +1648,7 @@ env:
   NB_EXPECTED_LOCKFILE_SHA256: "${lockfileChecksum}"
   NB_EXPECTED_LOCKFILE_PATH: "${lockfilePath}"
   NB_PACKAGE_MANAGER: "${packageManager}"
-jobs:
+${resilienceEnv(cb)}jobs:
   setup:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -1665,7 +1741,11 @@ jobs:
 
 
 
-${depDoctorStep("Phase 1 - Dependency doctor")}${smartInstallStep("Phase 1 - Install npm dependencies")}
+${depDoctorStep("Phase 1 - Dependency doctor")}
+${smartInstallStep("Phase 1 - Install npm dependencies")}
+${aiRepairLoopStep("Phase 1 - AI dependency repair loop", "phase1")}
+${peerAuditStep("Phase 1 · Peer dependency audit")}
+${postInstallStep("Phase 1 · Post-install verification")}
 
       - name: "Phase 1 - Upload CPR dependency diagnostics"
         if: always()
@@ -1675,6 +1755,8 @@ ${depDoctorStep("Phase 1 - Dependency doctor")}${smartInstallStep("Phase 1 - Ins
           path: |
             cpr-dependency-contract.log
             dependency-install.log
+            repair-plan.json
+            repair-execution.log
             package.json
             package-lock.json
             npm-shrinkwrap.json
@@ -1683,6 +1765,17 @@ ${depDoctorStep("Phase 1 - Dependency doctor")}${smartInstallStep("Phase 1 - Ins
             bun.lock
             bun.lockb
           if-no-files-found: warn
+          retention-days: 7
+
+      - name: "Phase 1 - Upload AI repair report"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-repair-report
+          path: |
+            repair-plan.json
+            repair-execution.log
+          if-no-files-found: ignore
           retention-days: 7
 
       - name: "Phase 1 - Install Capacitor + build web output"
@@ -1852,7 +1945,42 @@ ${resilienceInstallStep()}      - name: Set up Node.js ${nodeVersion}
             gradle-setup-\${{ runner.os }}-
       - name: 'Phase 3 · Clean Gradle JAR cache'
         run: rm -rf ~/.gradle/caches/jars-9 ~/.gradle/caches/transforms-* || true
-${depDoctorStep("Phase 3 · Dependency manifest check")}${smartInstallStep("Phase 3 · Install locked dependencies")}
+${depDoctorStep("Phase 3 · Dependency manifest check")}
+${smartInstallStep("Phase 3 · Install locked dependencies")}
+${aiRepairLoopStep("Phase 3 · AI dependency repair loop", "phase3")}
+${peerAuditStep("Phase 3 · Peer dependency audit")}
+${postInstallStep("Phase 3 · Post-install verification")}
+
+      - name: "Phase 3 - Upload CPR dependency diagnostics"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpr-dependency-diagnostics
+          path: |
+            cpr-dependency-contract.log
+            dependency-install.log
+            repair-plan.json
+            repair-execution.log
+            package.json
+            package-lock.json
+            npm-shrinkwrap.json
+            pnpm-lock.yaml
+            yarn.lock
+            bun.lock
+            bun.lockb
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: "Phase 3 - Upload AI repair report"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-repair-report
+          path: |
+            repair-plan.json
+            repair-execution.log
+          if-no-files-found: ignore
+          retention-days: 7
       - name: 'Phase 3 · Reconcile enabled plugins'
         run: |
           # Preserve user-owned plugins. NativeBridge only installs explicitly
@@ -2171,7 +2299,7 @@ async function setupPhase(body: BuildRequest, token: string) {
   const repositoryHead = await getRepositoryHead(username, repoName, token);
   const baseSha = repositoryHead.sha;
 
-  const workflowYml = getSetupWorkflow(body.appName || "MyApp", body.packageName || "com.nativebridge.app", body.plugins || [], body.webDir || "", repositoryHead.branch, body.cprBlueprint?.cprProjectBlueprint ?? {});
+  const workflowYml = getSetupWorkflow(body.appName || "MyApp", body.packageName || "com.nativebridge.app", body.plugins || [], body.webDir || "", repositoryHead.branch, body.cprBlueprint?.cprProjectBlueprint ?? {}, callbackCfgFor(body));
   validateWorkflowYaml(workflowYml, "setup");
 
   const treeItems: any[] = [];
@@ -2393,7 +2521,11 @@ ${resilienceInstallStep()}
           ls -la
           cat package.json | head -30
 
-${depDoctorStep("Dependency doctor")}${smartInstallStep("Install dependencies")}
+${depDoctorStep("Dependency doctor")}
+${smartInstallStep("Install dependencies")}
+${aiRepairLoopStep("AI dependency repair loop", "build")}
+${peerAuditStep("Peer dependency audit")}
+${postInstallStep("Post-install verification")}
 
 ${webDirResolveStep()}      - name: Build web project
         run: |

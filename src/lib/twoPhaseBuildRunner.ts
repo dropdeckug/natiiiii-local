@@ -330,6 +330,104 @@ async function persistCprVerification(projectId: string, result: ReturnType<type
   if (error) throw new Error(`Could not persist CPR verification: ${error.message}`);
 }
 
+function parseRepairLogsToAttempt(logExcerpt: string, attemptNumber = 1) {
+  if (!logExcerpt) return null;
+  if (!logExcerpt.includes("AI repair") && !logExcerpt.includes("repair-executor") && !logExcerpt.includes("NB_REPAIR_EXHAUSTED")) {
+    return null;
+  }
+  const diagnosisMatch = logExcerpt.match(/diagnosis:\s*([A-Z0-9_]+)\s*\(([^)]+)\)/i);
+  const rootCauseMatch = logExcerpt.match(/root cause:\s*([^\n]+)/i);
+  const exhaustedMatch = logExcerpt.match(/NB_REPAIR_EXHAUSTED=([A-Z0-9_]+)/i);
+  const succeededMatch = logExcerpt.includes("AI repair succeeded");
+
+  const diagnosisType = diagnosisMatch?.[1] || exhaustedMatch?.[1] || "UNKNOWN";
+  const source = (diagnosisMatch?.[2] as any) || "deterministic";
+  const rootCause = rootCauseMatch?.[1]?.trim() || (exhaustedMatch ? `AI repair exhausted for ${exhaustedMatch[1]}` : undefined);
+
+  const commandMatches = [...logExcerpt.matchAll(/\$\s+([^\n]+)/g)];
+  const commands = commandMatches.map((m) => ({ cmd: m[1].trim(), name: m[1].trim(), critical: false }));
+
+  const status: "succeeded" | "exhausted" | "executing" = succeededMatch
+    ? "succeeded"
+    : exhaustedMatch || logExcerpt.includes("exhausted")
+    ? "exhausted"
+    : "executing";
+
+  return {
+    attempt: attemptNumber,
+    maxAttempts: 3,
+    status,
+    diagnosisType,
+    rootCause,
+    source,
+    commands: commands.length ? commands : undefined,
+    timestamp: Date.now(),
+  };
+}
+
+async function syncRunnerRepairTelemetry(buildId?: string | null, projectId?: string | null, steps?: any[]) {
+  const buildStore = useBuildStore.getState();
+
+  if (buildId || projectId) {
+    try {
+      let query = supabase.from("build_events").select("*").order("created_at", { ascending: true });
+      if (buildId) {
+        query = query.eq("build_id", buildId);
+      } else if (projectId) {
+        query = query.eq("project_id", projectId);
+      }
+      const { data } = await query;
+      if (data && data.length) {
+        const repairRows = data.filter((row: any) => (row.meta as any)?.kind === "runner-repair");
+        for (const row of repairRows) {
+          const meta = (row.meta || {}) as any;
+          const attemptMatch = row.step.match(/attempt (\d+)/i);
+          const attemptNum = attemptMatch ? parseInt(attemptMatch[1], 10) : meta.diagnosis?.attempt || 1;
+          const existing = buildStore.repairAttempts.find((a) => a.attempt === attemptNum);
+          const isReport = row.step.includes("runner execution");
+          const status = isReport
+            ? meta.outcome === "repaired"
+              ? "succeeded"
+              : "exhausted"
+            : row.status === "error"
+            ? "failed"
+            : "executing";
+
+          buildStore.addOrUpdateRepairAttempt({
+            attempt: attemptNum,
+            maxAttempts: 3,
+            status,
+            diagnosisType: meta.diagnosis?.type || existing?.diagnosisType || "UNKNOWN",
+            rootCause: meta.diagnosis?.rootCause || existing?.rootCause,
+            evidence: meta.diagnosis?.evidence || existing?.evidence,
+            source: meta.source || existing?.source || "deterministic",
+            model: meta.model || existing?.model,
+            commands:
+              meta.commands?.map((c: any) =>
+                typeof c === "string" ? { cmd: c, name: c, critical: false } : c
+              ) || existing?.commands,
+            results: meta.results || existing?.results,
+            notes: row.message || existing?.notes,
+            timestamp: new Date(row.created_at).getTime(),
+          });
+        }
+      }
+    } catch {
+      // Non-critical telemetry sync failure
+    }
+  }
+
+  if (steps && Array.isArray(steps)) {
+    const repairStep = steps.find((s: any) => s.name?.toLowerCase().includes("ai dependency repair loop"));
+    if (repairStep && repairStep.logExcerpt) {
+      const parsed = parseRepairLogsToAttempt(repairStep.logExcerpt);
+      if (parsed) {
+        buildStore.addOrUpdateRepairAttempt(parsed);
+      }
+    }
+  }
+}
+
 async function pollPhaseStatus(repoName: string, runId: number | null, commitSha?: string | null, phase?: string) {
   const buildStore = useBuildStore.getState();
   const maxPolls = 90;
@@ -366,6 +464,7 @@ async function pollPhaseStatus(repoName: string, runId: number | null, commitSha
     const steps = Array.isArray(data.allSteps) ? data.allSteps : Array.isArray(data.steps) ? data.steps : null;
     if (steps) {
       buildStore.setActiveCiSteps(steps);
+      void syncRunnerRepairTelemetry(buildStore.activeJobId, buildStore.currentProjectId, steps);
       const activeStep = steps.find((s: any) => s.status === "in_progress");
       if (activeStep) buildStore.setThinkingCaption(activeStep.name);
       if (steps.length !== lastStepCount) lastStepCount = steps.length;
@@ -418,6 +517,7 @@ async function pollPhaseStatus(repoName: string, runId: number | null, commitSha
       // Pull the complete GitHub Actions logs so the console and the AI can
       // read exactly what broke.
       if (resolvedRunId) await importCiLogs({ repoName, runId: resolvedRunId, platform: "android", phase });
+      await syncRunnerRepairTelemetry(buildStore.activeJobId, buildStore.currentProjectId, steps);
       await flushLogs();
       return { success: false, runId: data.runId || resolvedRunId, error: detail || "GitHub Actions failed", steps: steps ?? [] };
     }
@@ -599,8 +699,30 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
     const phase1Failures = new Set<string>();
     while (!result.success && p1Attempt < MAX_PHASE1_REPAIRS) {
       const failingStep = useBuildStore.getState().activeCiSteps.find((s: any) => s.conclusion === "failure");
+      const failingStepName = (failingStep as any)?.name || "";
       const excerpt = (failingStep as any)?.logExcerpt || "";
-      const fullErr = (result.error || "Phase 1 failed") + (excerpt ? `\n\nFailing step: ${(failingStep as any)?.name}\n${excerpt}` : "");
+      const fullErr = (result.error || "Phase 1 failed") + (excerpt ? `\n\nFailing step: ${failingStepName}\n${excerpt}` : "");
+
+      const isRunnerRepairFailure =
+        failingStepName.toLowerCase().includes("ai dependency repair loop") ||
+        failingStepName.toLowerCase().includes("install npm dependencies") ||
+        failingStepName.toLowerCase().includes("dependency doctor") ||
+        fullErr.includes("NB_REPAIR_EXHAUSTED") ||
+        fullErr.includes("Runner Repair Exhausted") ||
+        fullErr.includes("dependency installation could not be completed");
+
+      if (isRunnerRepairFailure) {
+        logEvent({
+          logType: "pipeline",
+          level: "error",
+          phase: "phase1",
+          runId: result.runId ?? null,
+          message: "Runner AI repair loop exhausted — halting browser repair",
+          raw: fullErr,
+        });
+        throw new Error(fullErr);
+      }
+
       const logEventId = buildStore.pushAiEvent({ op: "search", title: "Retrieving failed run logs", detail: `GitHub run ${result.runId ?? "pending"}`, status: "active", refs: [String(result.runId ?? "unknown")] });
       const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
       buildStore.updateAiEvent(logEventId, { detail: `${ciErrors.length} run-scoped error and warning entries loaded`, status: "done", completedAt: Date.now() });
@@ -1245,8 +1367,30 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
     const phase3Failures = new Set<string>();
     while (!result.success && repairAttempt < MAX_PHASE3_REPAIRS) {
       const failingStep = useBuildStore.getState().activeCiSteps.find((s: any) => s.conclusion === "failure");
+      const failingStepName = failingStep?.name || "";
       const excerpt = failingStep?.logExcerpt || "";
-      const fullErr = (result.error || "Phase 3 failed") + (excerpt ? `\n\nFailing step: ${failingStep?.name}\n${excerpt}` : "");
+      const fullErr = (result.error || "Phase 3 failed") + (excerpt ? `\n\nFailing step: ${failingStepName}\n${excerpt}` : "");
+
+      const isRunnerRepairFailure =
+        failingStepName.toLowerCase().includes("ai dependency repair loop") ||
+        failingStepName.toLowerCase().includes("install locked dependencies") ||
+        failingStepName.toLowerCase().includes("dependency manifest check") ||
+        fullErr.includes("NB_REPAIR_EXHAUSTED") ||
+        fullErr.includes("Runner Repair Exhausted") ||
+        fullErr.includes("dependency installation could not be completed");
+
+      if (isRunnerRepairFailure) {
+        logEvent({
+          logType: "pipeline",
+          level: "error",
+          phase: "phase3",
+          runId: result.runId ?? null,
+          message: "Runner AI repair loop exhausted — halting browser repair",
+          raw: fullErr,
+        });
+        throw new Error(fullErr);
+      }
+
       const logEventId = buildStore.pushAiEvent({ op: "search", title: "Retrieving failed run logs", detail: `GitHub run ${result.runId ?? "pending"}`, status: "active", refs: [String(result.runId ?? "unknown")] });
       const ciErrors = await fetchErrorContext({ projectId: opts.projectId, runId: result.runId ?? null, limit: 120 });
       buildStore.updateAiEvent(logEventId, { detail: `${ciErrors.length} run-scoped error and warning entries loaded`, status: "done", completedAt: Date.now() });

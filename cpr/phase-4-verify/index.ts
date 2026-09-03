@@ -22,6 +22,7 @@ export {
   packageFromSpecifier,
   type BuildRetryIO,
 } from "./build-retry.ts";
+export * from "./repair-plan.ts";
 export const MAX_HEADLESS_RETRIES = 2;
 export const BUILD_TIMEOUT_MINUTES = 5;
 export const INSTALL_TIMEOUT_MINUTES = 3;
