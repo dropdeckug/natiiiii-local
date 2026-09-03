@@ -4,6 +4,7 @@ import { DEFAULT_MODEL, gatewayJson } from "../_shared/aiGateway.ts";
 import {
   ALLOWED_BINARIES,
   classifyInstallFailure,
+  makeTodos,
   planSignature,
   sanitizePlan,
   type RepairPlan,
@@ -120,9 +121,14 @@ Diagnosis type must be one of: LOCKFILE_MISMATCH, DEPENDENCY_CONFLICT,
 MISSING_FILE, SCRIPT_FAILURE, REGISTRY_404, ENGINE_MISMATCH, NETWORK,
 DISK_SPACE, UNKNOWN.
 
+Crucial to-do requirement:
+You must provide a "todos" list containing EXACTLY five sequential to-dos (not more than five, and not less than five).
+Name each to-do clearly yourself to describe the step being performed (e.g. 1/5: Analyze conflict logs & isolate versions, 2/5: Configure relaxed resolution flags, 3/5: Execute targeted installation commands, 4/5: Verify dependency tree integrity, 5/5: Validate workflow pipeline readiness).
+
 Respond with JSON only:
 {"diagnosis":{"type":"...","severity":"low|medium|high","rootCause":"...","evidence":["quoted log lines"]},
  "commands":[{"step":1,"name":"...","cmd":"npm ...","critical":true,"why":"..."}],
+ "todos":[{"stepNumber":1,"title":"...","details":"..."},{"stepNumber":2,"title":"...","details":"..."},{"stepNumber":3,"title":"...","details":"..."},{"stepNumber":4,"title":"...","details":"..."},{"stepNumber":5,"title":"...","details":"..."}],
  "verify":["npm ls --depth=0"],
  "rollback":[],
  "notes":"one plain-English sentence"}`;
@@ -188,7 +194,7 @@ async function modelPlan(body: PlanRequest, deterministic: RepairPlan): Promise<
       evidence: Array.isArray(d.evidence) ? d.evidence.map((e) => String(e).slice(0, 240)).slice(0, 6) : [],
     },
     commands: Array.isArray(parsed.commands)
-      ? (parsed.commands as Record<string, unknown>[]).slice(0, 8).map((c, i) => ({
+      ? (parsed.commands as Record<string, unknown>[]).slice(0, 5).map((c, i) => ({
           step: i + 1,
           name: String(c?.name ?? `Step ${i + 1}`).slice(0, 120),
           cmd: String(c?.cmd ?? ""),
@@ -198,6 +204,24 @@ async function modelPlan(body: PlanRequest, deterministic: RepairPlan): Promise<
       : [],
     verify: Array.isArray(parsed.verify) ? (parsed.verify as unknown[]).map(String).slice(0, 4) : ["npm ls --depth=0"],
     rollback: Array.isArray(parsed.rollback) ? (parsed.rollback as unknown[]).map(String).slice(0, 4) : [],
+    todos: Array.isArray(parsed.todos) && (parsed.todos as Record<string, unknown>[]).length === 5
+      ? (parsed.todos as Record<string, unknown>[]).map((t, i) => ({
+          id: `todo-${i + 1}`,
+          stepNumber: i + 1,
+          totalSteps: 5 as const,
+          title: String(t?.title ?? `Repair step ${i + 1}`).slice(0, 120),
+          details: t?.details ? String(t.details).slice(0, 240) : undefined,
+          status: "pending" as const,
+        }))
+      : makeTodos(
+          Array.isArray(parsed.commands)
+            ? (parsed.commands as Record<string, unknown>[]).slice(0, 5).map((c, i) => ({
+                title: String(c?.name ?? `Step ${i + 1}`),
+                details: String(c?.why ?? ""),
+                command: String(c?.cmd ?? ""),
+              }))
+            : []
+        ),
     source: "model",
     attempt: body.attempt ?? 1,
     model,

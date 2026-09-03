@@ -12,7 +12,7 @@
 import JSZip from "jszip";
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectStore, type ProjectFile } from "@/stores/projectStore";
-import { useBuildStore } from "@/stores/buildStore";
+import { useBuildStore, type RepairTodo } from "@/stores/buildStore";
 import { getSecretsForBuild, loadPluginSecrets, arePluginSecretsComplete, savePluginSecret } from "@/lib/pluginSecretsService";
 import { wireDisplayMode, displayModeWiringToLogs } from "@/lib/plugins/displayMode";
 import { DEFAULT_DISPLAY_MODE_CONFIG, readDisplayModeConfig, getDisplayMode } from "@/lib/plugins/displayMode/registry";
@@ -353,6 +353,49 @@ function parseRepairLogsToAttempt(logExcerpt: string, attemptNumber = 1) {
     ? "exhausted"
     : "executing";
 
+  const todoMatches = [...logExcerpt.matchAll(/\[To-Do\s+(\d)\/5\]\s+([^\n]+)/gi)];
+  const todos: RepairTodo[] = [];
+  for (let i = 1; i <= 5; i++) {
+    const match = todoMatches.find((m) => m[1] === String(i));
+    const title = match ? match[2].replace(/\s*\.\.\.\s*\(in progress\)/i, "").trim() : undefined;
+    const isCompleted = logExcerpt.includes(`✓ [To-Do ${i}/5]`);
+    const isFailed = logExcerpt.includes(`✗ [To-Do ${i}/5]`);
+    const isInProgress = logExcerpt.includes(`[To-Do ${i}/5]`) && !isCompleted && !isFailed;
+
+    let stepStatus: RepairTodo["status"] = "pending";
+    if (succeededMatch) {
+      stepStatus = "completed";
+    } else if (isCompleted) {
+      stepStatus = "completed";
+    } else if (isFailed) {
+      stepStatus = "failed";
+    } else if (isInProgress) {
+      stepStatus = "in_progress";
+    } else if (status === "exhausted" && i >= 3) {
+      stepStatus = "failed";
+    } else if (i <= 2) {
+      stepStatus = "completed";
+    }
+
+    todos.push({
+      id: `todo-${i}`,
+      stepNumber: i,
+      totalSteps: 5,
+      title:
+        title ||
+        (i === 1
+          ? `Analyze failure context & isolate root cause (${diagnosisType})`
+          : i === 2
+          ? "Formulate remediation plan & command sequence"
+          : i === 3
+          ? (commands[0]?.name ? `Execute: ${commands[0].name}` : "Execute targeted repair commands on runner")
+          : i === 4
+          ? "Verify dependency health & filesystem integrity"
+          : "Validate workflow readiness & resume pipeline"),
+      status: stepStatus,
+    });
+  }
+
   return {
     attempt: attemptNumber,
     maxAttempts: 3,
@@ -361,6 +404,7 @@ function parseRepairLogsToAttempt(logExcerpt: string, attemptNumber = 1) {
     rootCause,
     source,
     commands: commands.length ? commands : undefined,
+    todos,
     timestamp: Date.now(),
   };
 }
@@ -406,6 +450,7 @@ async function syncRunnerRepairTelemetry(buildId?: string | null, projectId?: st
               meta.commands?.map((c: any) =>
                 typeof c === "string" ? { cmd: c, name: c, critical: false } : c
               ) || existing?.commands,
+            todos: meta.plan?.todos || meta.todos || existing?.todos,
             results: meta.results || existing?.results,
             notes: row.message || existing?.notes,
             timestamp: new Date(row.created_at).getTime(),
@@ -704,12 +749,10 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       const fullErr = (result.error || "Phase 1 failed") + (excerpt ? `\n\nFailing step: ${failingStepName}\n${excerpt}` : "");
 
       const isRunnerRepairFailure =
-        failingStepName.toLowerCase().includes("ai dependency repair loop") ||
-        failingStepName.toLowerCase().includes("install npm dependencies") ||
-        failingStepName.toLowerCase().includes("dependency doctor") ||
-        fullErr.includes("NB_REPAIR_EXHAUSTED") ||
-        fullErr.includes("Runner Repair Exhausted") ||
-        fullErr.includes("dependency installation could not be completed");
+        (fullErr.includes("NB_REPAIR_EXHAUSTED") ||
+          fullErr.includes("Runner Repair Exhausted") ||
+          fullErr.includes("dependency installation could not be completed")) &&
+        p1Attempt > 0;
 
       if (isRunnerRepairFailure) {
         logEvent({

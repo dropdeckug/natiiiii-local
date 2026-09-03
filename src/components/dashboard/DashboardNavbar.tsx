@@ -148,13 +148,18 @@ const DashboardNavbar = ({ projectName, projectId, orgName = "Personal", onAIOpe
       .order("created_at", { ascending: true });
     if (appRows) {
       setApps(appRows);
-      setActiveAppId((curr) => {
-        const next = curr && appRows.some((a) => a.id === curr) ? curr : appRows[0]?.id ?? null;
-        applyPlatform(appRows.find((a) => a.id === next)?.platform);
-        return next;
-      });
+      setActiveAppId((curr) => (curr && appRows.some((a) => a.id === curr) ? curr : appRows[0]?.id ?? null));
     }
   };
+
+  // Keep activePlatform synced with the selected app's platform safely in an effect
+  useEffect(() => {
+    if (!activeAppId || apps.length === 0) return;
+    const activeApp = apps.find((a) => a.id === activeAppId);
+    if (activeApp?.platform) {
+      applyPlatform(activeApp.platform);
+    }
+  }, [activeAppId, apps]);
 
   useEffect(() => {
     (async () => {

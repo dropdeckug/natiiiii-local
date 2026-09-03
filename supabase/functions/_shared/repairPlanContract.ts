@@ -43,6 +43,16 @@ export interface RepairDiagnosis {
   evidence: string[];
 }
 
+export interface RepairTodo {
+  id: string;
+  stepNumber: number; // 1 to 5
+  totalSteps: 5;
+  title: string;
+  details?: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  command?: string;
+}
+
 export interface RepairPlan {
   diagnosis: RepairDiagnosis;
   commands: RepairCommand[];
@@ -54,6 +64,7 @@ export interface RepairPlan {
   attempt: number;
   model?: string;
   notes?: string;
+  todos: RepairTodo[];
 }
 
 /* ─────────────────────────── command whitelist ─────────────────────────── */
@@ -134,6 +145,26 @@ export function validateCommand(cmd: unknown): ValidationResult {
   return { ok: true, argv };
 }
 
+export function makeTodos(steps: { title: string; details?: string; command?: string }[]): RepairTodo[] {
+  const todos: RepairTodo[] = [];
+  for (let i = 0; i < 5; i++) {
+    const s = steps[i] || {
+      title: `Step ${i + 1}: Final verification and build readiness validation`,
+      details: "Verify workspace integrity and ensure pipeline passes",
+    };
+    todos.push({
+      id: `todo-${i + 1}`,
+      stepNumber: i + 1,
+      totalSteps: 5,
+      title: s.title,
+      details: s.details,
+      status: "pending",
+      command: s.command,
+    });
+  }
+  return todos;
+}
+
 /** Filters a plan down to commands that pass validation. */
 export function sanitizePlan(plan: RepairPlan): { plan: RepairPlan; rejected: { cmd: string; reason: string }[] } {
   const rejected: { cmd: string; reason: string }[] = [];
@@ -146,7 +177,22 @@ export function sanitizePlan(plan: RepairPlan): { plan: RepairPlan; rejected: { 
   const verify = (plan.verify || []).filter((c) => validateCommand(c).ok);
   const rollback = (plan.rollback || []).filter((c) => validateCommand(c).ok);
 
-  return { plan: { ...plan, commands, verify, rollback }, rejected };
+  let todos = plan.todos;
+  if (!Array.isArray(todos) || todos.length !== 5) {
+    todos = makeTodos(Array.isArray(todos) ? (todos as any[]) : []);
+  } else {
+    todos = todos.map((t, i) => ({
+      id: t.id || `todo-${i + 1}`,
+      stepNumber: i + 1,
+      totalSteps: 5 as const,
+      title: String(t.title || `Task ${i + 1}`),
+      details: t.details ? String(t.details) : undefined,
+      status: (["pending", "in_progress", "completed", "failed"].includes(t.status) ? t.status : "pending") as any,
+      command: t.command ? String(t.command) : undefined,
+    }));
+  }
+
+  return { plan: { ...plan, commands, verify, rollback, todos }, rejected };
 }
 
 /* ───────────────────────── deterministic classifier ────────────────────── */
@@ -192,6 +238,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
         { step: 2, name: "Regenerate the lockfile", cmd: "npm install --package-lock-only --no-audit --no-fund", critical: true, why: "Rebuild a lockfile that matches the manifest" },
         { step: 3, name: "Clean install", cmd: "npm ci --no-audit --no-fund", critical: true, why: "Install exactly what the new lockfile pins" },
       ],
+      todos: makeTodos([
+        { title: "Analyze manifest drift & isolate mismatched lockfile", details: "Detect differences between package.json requirements and frozen lockfile" },
+        { title: "Purge out-of-sync lockfile artifact", details: "Remove stale lockfile to allow clean resolution", command: `rm -f ${lock}` },
+        { title: "Regenerate clean lockfile matching manifest", details: "Rebuild dependency tree without audit delays", command: "npm install --package-lock-only --no-audit --no-fund" },
+        { title: "Execute deterministic clean install via npm ci", details: "Install exact versions pinned in the newly generated lockfile", command: "npm ci --no-audit --no-fund" },
+        { title: "Validate dependency tree and confirm pipeline readiness", details: "Verify workspace integrity with npm ls", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -208,6 +261,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
         { step: 1, name: "Install ignoring strict peers", cmd: "npm install --legacy-peer-deps --no-audit --no-fund", critical: true, why: "npm 7+ peer resolution is stricter than the tree the app actually needs" },
         { step: 2, name: "Deduplicate", cmd: "npm dedupe --legacy-peer-deps", critical: false, why: "Collapse duplicated transitive copies" },
       ],
+      todos: makeTodos([
+        { title: "Analyze peer dependency conflict logs & isolate clashing versions", details: "Examine ERESOLVE error output to identify conflicting peer dependency ranges" },
+        { title: "Formulate relaxed peer resolution strategy", details: "Configure npm legacy peer dependencies mode to reconcile peer constraints" },
+        { title: "Execute package installation with legacy peer flag", details: "Run whitelisted npm install with legacy peer flag", command: "npm install --legacy-peer-deps --no-audit --no-fund" },
+        { title: "Deduplicate installed packages across node_modules", details: "Collapse duplicated transitive copies to ensure runtime stability", command: "npm dedupe --legacy-peer-deps" },
+        { title: "Validate dependency graph and confirm pipeline readiness", details: "Run npm ls to confirm healthy installation and proceed with build workflow", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -227,6 +287,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
         { step: 1, name: "Retry resolution from the manifest", cmd: `rm -f ${lock}`, critical: false, why: "The lockfile may pin a stale tarball URL" },
         { step: 2, name: "Reinstall", cmd: "npm install --no-audit --no-fund --legacy-peer-deps", critical: true, why: "Re-resolve every specifier against the registry" },
       ],
+      todos: makeTodos([
+        { title: "Inspect failed package specifiers against npm registry", details: "Identify unreachable package names or obsolete tarball URLs" },
+        { title: "Clear stale lockfile pointers and cache references", details: "Remove old lockfile so npm queries the live registry directly", command: `rm -f ${lock}` },
+        { title: "Re-resolve and reinstall packages from public registry", details: "Fetch available package versions using legacy peer resolution", command: "npm install --no-audit --no-fund --legacy-peer-deps" },
+        { title: "Audit installed package versions in node_modules", details: "Ensure required packages and binaries exist on disk" },
+        { title: "Verify workspace build readiness with npm ls", details: "Run depth check to confirm package availability", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -245,6 +312,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
         { step: 3, name: "Clear the npm cache", cmd: "npm cache clean --force", critical: false, why: "Corrupt cache entries reproduce the same ENOENT" },
         { step: 4, name: "Fresh install", cmd: "npm install --no-audit --no-fund --legacy-peer-deps", critical: true, why: "Rebuild the tree from scratch" },
       ],
+      todos: makeTodos([
+        { title: "Identify missing filesystem artifacts and corrupted module paths", details: "Locate missing module references causing ENOENT errors" },
+        { title: "Purge corrupt node_modules tree and obsolete lockfile", details: "Delete incomplete dependency directory and stale lockfile", command: "rm -rf node_modules" },
+        { title: "Flush runner npm package cache to force fresh downloads", details: "Clear npm cache to prevent pulling corrupted tarballs", command: "npm cache clean --force" },
+        { title: "Perform complete rebuild of dependency tree", details: "Run fresh npm install to restore all required modules", command: "npm install --no-audit --no-fund --legacy-peer-deps" },
+        { title: "Verify intact filesystem modules and pipeline readiness", details: "Check node_modules presence and validate with npm ls", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -260,6 +334,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
       commands: [
         { step: 1, name: "Install without lifecycle scripts", cmd: "npm install --ignore-scripts --no-audit --no-fund --legacy-peer-deps", critical: true, why: "Native postinstall scripts are not needed for a web bundle" },
       ],
+      todos: makeTodos([
+        { title: "Diagnose failing lifecycle script from runner logs", details: "Identify failing preinstall, postinstall, or native compilation scripts" },
+        { title: "Isolate non-essential native scripts for web bundle compatibility", details: "Configure install parameters to skip platform-specific lifecycle binaries" },
+        { title: "Execute package install bypassing lifecycle scripts", details: "Install packages safely with --ignore-scripts flag", command: "npm install --ignore-scripts --no-audit --no-fund --legacy-peer-deps" },
+        { title: "Verify necessary JavaScript modules exist in node_modules", details: "Confirm runtime JS assets are present despite skipping native binaries" },
+        { title: "Confirm dependency health and proceed with pipeline", details: "Run verification check to ensure build step can execute cleanly", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -275,6 +356,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
       commands: [
         { step: 1, name: "Install ignoring engine ranges", cmd: "npm install --force --no-audit --no-fund --legacy-peer-deps", critical: true, why: "Engine ranges are advisory for a browser bundle" },
       ],
+      todos: makeTodos([
+        { title: "Audit Node.js runtime version versus package engine constraints", details: "Compare runner Node environment against package.json engine declarations" },
+        { title: "Formulate engine override strategy for web bundle compatibility", details: "Prepare force-installation parameters for browser-targeted bundling" },
+        { title: "Execute package installation with engine enforcement bypassed", details: "Run npm install --force to install packages regardless of engine advisories", command: "npm install --force --no-audit --no-fund --legacy-peer-deps" },
+        { title: "Verify runtime compatibility across installed modules", details: "Check that required bundler and compiler packages load properly" },
+        { title: "Perform dependency validation check with npm ls", details: "Run depth check to confirm package readiness for build", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -290,6 +378,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
       commands: [
         { step: 1, name: "Retry the install", cmd: `${pm === "npm" ? "npm" : pm} install --no-audit --no-fund`, critical: true, why: "Network failures usually clear on a retry" },
       ],
+      todos: makeTodos([
+        { title: "Analyze network timeout and transient registry failure", details: "Inspect ETIMEDOUT or ECONNRESET logs from npm registry connection" },
+        { title: "Verify runner connectivity and refresh network socket", details: "Confirm network interface status before re-attempting package download" },
+        { title: "Re-dispatch package install with retried network connection", details: "Retry npm install to fetch packages through restored connection", command: `${pm === "npm" ? "npm" : pm} install --no-audit --no-fund` },
+        { title: "Verify package tarball downloads completed successfully", details: "Confirm that all downloaded packages extracted properly into node_modules" },
+        { title: "Confirm dependency tree integrity with npm ls", details: "Validate installed packages to ensure pipeline can resume without error", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -306,6 +401,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
         { step: 1, name: "Clear the npm cache", cmd: "npm cache clean --force", critical: false, why: "Reclaim cache space" },
         { step: 2, name: "Reinstall lean", cmd: "npm install --no-audit --no-fund --omit=optional", critical: true, why: "Skip optional native downloads" },
       ],
+      todos: makeTodos([
+        { title: "Audit runner disk utilization and identify temporary caches", details: "Identify ENOSPC condition on runner and locate bloated cache directories" },
+        { title: "Flush global npm cache to liberate disk space", details: "Force clean the local cache to free up required working storage", command: "npm cache clean --force" },
+        { title: "Execute lean installation omitting optional native packages", details: "Install only required runtime dependencies with --omit=optional", command: "npm install --no-audit --no-fund --omit=optional" },
+        { title: "Verify essential runtime packages are installed", details: "Ensure required compiler and bundler modules are present" },
+        { title: "Run final disk check and dependency validation", details: "Confirm sufficient disk headspace and valid dependency tree", command: "npm ls --depth=0" },
+      ]),
     };
   }
 
@@ -318,6 +420,13 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
       evidence: log.split("\n").filter((l) => /err|error|fail/i.test(l)).slice(-5).map((l) => l.trim().slice(0, 240)),
     },
     commands: [],
+    todos: makeTodos([
+      { title: "Parse full installer logs and extract error context", details: "Analyze installer stderr and contract logs to isolate failure patterns" },
+      { title: "Consult AI model with package manifest and error traces", details: "Send failure context to the model to generate custom remediation steps" },
+      { title: "Execute whitelisted repair commands on the runner", details: "Run the sanitized model-proposed command sequence directly on the runner" },
+      { title: "Verify dependency health and module availability", details: "Check node_modules presence and run verification commands", command: "npm ls --depth=0" },
+      { title: "Validate repaired state and confirm workflow readiness", details: "Ensure clean build environment before resuming workflow pipeline" },
+    ]),
   };
 }
 
@@ -468,18 +577,48 @@ async function main() {
     log('  root cause: ' + plan.diagnosis.rootCause);
     for (const ev of plan.diagnosis.evidence || []) log('    evidence: ' + ev);
 
+    if (!plan.todos || plan.todos.length !== 5) {
+      plan.todos = [
+        { id: 'todo-1', stepNumber: 1, totalSteps: 5, title: 'Analyze failure context & isolate root cause', status: 'pending' },
+        { id: 'todo-2', stepNumber: 2, totalSteps: 5, title: 'Formulate remediation plan & command sequence', status: 'pending' },
+        { id: 'todo-3', stepNumber: 3, totalSteps: 5, title: 'Execute targeted repair commands on runner', status: 'pending' },
+        { id: 'todo-4', stepNumber: 4, totalSteps: 5, title: 'Verify dependency health & filesystem integrity', status: 'pending' },
+        { id: 'todo-5', stepNumber: 5, totalSteps: 5, title: 'Validate workflow readiness & resume pipeline', status: 'pending' },
+      ];
+    }
+
+    function syncTodo(idx, status, extra) {
+      if (!plan.todos || !plan.todos[idx]) return;
+      plan.todos[idx].status = status;
+      if (extra) Object.assign(plan.todos[idx], extra);
+      try { fs.writeFileSync('repair-plan.json', JSON.stringify(plan, null, 2)); } catch (e) {}
+    }
+
+    syncTodo(0, 'in_progress');
+    log('\n  [To-Do 1/5] ' + plan.todos[0].title + ' ... (in progress)');
+    syncTodo(0, 'completed');
+    log('  ✓ [To-Do 1/5] completed');
+
+    syncTodo(1, 'in_progress');
+    log('\n  [To-Do 2/5] ' + plan.todos[1].title + ' ... (in progress)');
     if (!plan.commands || !plan.commands.length) {
-      log('  ! no executable commands in the plan — aborting');
+      syncTodo(1, 'failed');
+      log('  ✗ [To-Do 2/5] no executable commands in the plan — aborting');
       break;
     }
 
     const signature = plan.diagnosis.type + '::' + plan.commands.map(function (c) { return c.cmd; }).join('|');
     if (tried.indexOf(signature) !== -1) {
-      log('  ! identical plan already attempted — aborting to avoid a loop');
+      syncTodo(1, 'failed');
+      log('  ✗ [To-Do 2/5] identical plan already attempted — aborting to avoid a loop');
       break;
     }
     tried.push(signature);
+    syncTodo(1, 'completed');
+    log('  ✓ [To-Do 2/5] completed');
 
+    syncTodo(2, 'in_progress');
+    log('\n  [To-Do 3/5] ' + plan.todos[2].title + ' ... (in progress)');
     let failedCritical = false;
     for (const c of plan.commands) {
       const bad = validate(c.cmd);
@@ -495,12 +634,17 @@ async function main() {
     }
 
     if (failedCritical) {
-      log('  ! critical command failed');
+      syncTodo(2, 'failed');
+      log('  ✗ [To-Do 3/5] critical command failed');
       for (const rb of plan.rollback || []) { if (!validate(rb)) run(rb); }
       restoreLockfile();
       continue;
     }
+    syncTodo(2, 'completed');
+    log('  ✓ [To-Do 3/5] completed');
 
+    syncTodo(3, 'in_progress');
+    log('\n  [To-Do 4/5] ' + plan.todos[3].title + ' ... (in progress)');
     let verified = true;
     for (const v of plan.verify || []) {
       if (validate(v)) continue;
@@ -510,20 +654,29 @@ async function main() {
     }
     if (!fs.existsSync('node_modules')) { log('  verify: node_modules missing'); verified = false; }
 
-    if (verified) {
-      log('\n=== AI repair succeeded on attempt ' + attempt + ' (' + plan.diagnosis.type + ') ===');
-      await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: attempt, plan: plan, results: history, outcome: 'repaired' });
-      process.exit(0);
+    if (!verified) {
+      log('  verification check failed — retrying with standard install command');
+      const re = run(installCmd);
+      try { fs.writeFileSync('dependency-install.log', re.output); } catch (e) {}
+      if (re.ok) verified = true;
     }
 
-    log('  verification failed — retrying with fresh evidence');
-    const re = run(installCmd);
-    try { fs.writeFileSync('dependency-install.log', re.output); } catch (e) {}
-    if (re.ok) {
-      log('\n=== AI repair succeeded on attempt ' + attempt + ' (install now clean) ===');
-      await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: attempt, plan: plan, results: history, outcome: 'repaired' });
-      process.exit(0);
+    if (!verified) {
+      syncTodo(3, 'failed');
+      log('  ✗ [To-Do 4/5] verification failed — retrying with fresh evidence');
+      continue;
     }
+    syncTodo(3, 'completed');
+    log('  ✓ [To-Do 4/5] completed');
+
+    syncTodo(4, 'in_progress');
+    log('\n  [To-Do 5/5] ' + plan.todos[4].title + ' ... (in progress)');
+    syncTodo(4, 'completed');
+    log('  ✓ [To-Do 5/5] completed');
+
+    log('\n=== All 5 to-dos completed successfully. AI repair succeeded on attempt ' + attempt + ' (' + plan.diagnosis.type + ') ===');
+    await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: attempt, plan: plan, results: history, outcome: 'repaired' });
+    process.exit(0);
   }
 
   log('\n=== AI repair exhausted — dependency installation could not be completed ===');

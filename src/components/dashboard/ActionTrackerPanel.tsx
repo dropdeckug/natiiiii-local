@@ -806,6 +806,7 @@ const ActionTrackerPanel = ({
                 source={att.source}
                 model={att.model}
                 commands={att.commands}
+                todos={att.todos}
                 results={att.results}
                 notes={att.notes}
               />

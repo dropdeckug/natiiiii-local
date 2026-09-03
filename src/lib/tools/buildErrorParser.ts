@@ -55,7 +55,7 @@ const ERROR_PATTERNS: {
     autoFixable: true,
   },
   {
-    pattern: /ERESOLVE|npm ERR! peer dep|peer dependency/i,
+    pattern: /ERESOLVE|npm ERR! peer dep|peer dependency|could not resolve dependency/i,
     category: "dependency",
     title: "Dependency resolution conflict",
     suggestedFix: "Use --legacy-peer-deps flag or update conflicting package versions in package.json.",

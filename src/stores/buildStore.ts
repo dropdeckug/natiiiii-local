@@ -59,6 +59,17 @@ export interface RepairCommandResult {
   tail?: string;
 }
 
+export interface RepairTodo {
+  id: string;
+  stepNumber: number; // 1 to 5
+  totalSteps: 5;
+  title: string;
+  details?: string;
+  status: "pending" | "in_progress" | "completed" | "failed";
+  command?: string;
+  completedAt?: number;
+}
+
 export interface RepairAttemptInfo {
   attempt: number;
   maxAttempts: number;
@@ -70,6 +81,7 @@ export interface RepairAttemptInfo {
   model?: string | null;
   commands?: { cmd: string; name: string; critical: boolean }[];
   results?: RepairCommandResult[];
+  todos?: RepairTodo[];
   notes?: string;
   timestamp: number;
 }
@@ -158,6 +170,7 @@ interface BuildStore {
   clearAiTimeline: () => void;
   setRepairAttempts: (attempts: RepairAttemptInfo[]) => void;
   addOrUpdateRepairAttempt: (attempt: RepairAttemptInfo) => void;
+  updateRepairTodo: (attemptNumber: number, stepNumber: number, updates: Partial<RepairTodo>) => void;
   clearRepairAttempts: () => void;
   clearBuildProgress: () => void;
 }
@@ -263,6 +276,19 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
       }
       const next = [...s.repairAttempts];
       next[idx] = { ...next[idx], ...attempt };
+      return { repairAttempts: next };
+    }),
+  updateRepairTodo: (attemptNumber, stepNumber, updates) =>
+    set((s) => {
+      const idx = s.repairAttempts.findIndex((a) => a.attempt === attemptNumber);
+      if (idx === -1) return {};
+      const targetAttempt = s.repairAttempts[idx];
+      const todos = targetAttempt.todos ? [...targetAttempt.todos] : [];
+      const todoIdx = todos.findIndex((t) => t.stepNumber === stepNumber);
+      if (todoIdx === -1) return {};
+      todos[todoIdx] = { ...todos[todoIdx], ...updates };
+      const next = [...s.repairAttempts];
+      next[idx] = { ...targetAttempt, todos };
       return { repairAttempts: next };
     }),
   clearRepairAttempts: () => set({ repairAttempts: [] }),

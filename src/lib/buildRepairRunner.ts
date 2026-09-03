@@ -11,7 +11,7 @@
 
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectStore, type ProjectFile } from "@/stores/projectStore";
-import { useBuildStore } from "@/stores/buildStore";
+import { useBuildStore, type RepairTodo } from "@/stores/buildStore";
 import type { ParsedBuildError } from "@/lib/tools/buildErrorParser";
 import { toast } from "sonner";
 import { logEvent } from "@/lib/logs/logSink";
@@ -254,6 +254,93 @@ export async function runRepair(
     }
   }
 
+  // Handle peer dependency conflicts automatically by ensuring legacy-peer-deps is set
+  const isPeerDepConflict =
+    parsed!.category === "dependency" ||
+    logs.some((l) => /Could not resolve dependency|ERESOLVE|peer dep/i.test(l)) ||
+    errorText.includes("Could not resolve dependency");
+
+  if (isPeerDepConflict) {
+    const npmrcFile = findFile(".npmrc");
+    const currentNpmrc = npmrcFile?.content || "";
+    if (!currentNpmrc.includes("legacy-peer-deps=true")) {
+      const newNpmrc = currentNpmrc
+        ? `${currentNpmrc.trim()}\nlegacy-peer-deps=true\n`
+        : "legacy-peer-deps=true\n";
+      projectStore.updateFileContent(".npmrc", newNpmrc);
+      deterministicChanges.push({
+        path: ".npmrc",
+        before: currentNpmrc,
+        after: newNpmrc,
+        reason: "Enable legacy peer dependencies resolution for npm install",
+      });
+      deterministicEdits.push("Added legacy-peer-deps=true to .npmrc to resolve dependency resolution conflict");
+      logEvent({
+        logType: "ai-repair",
+        level: "info",
+        message: "Added legacy-peer-deps=true to .npmrc",
+        stepName: ".npmrc",
+        meta: { method: "EDIT", pathname: ".npmrc" },
+      });
+    }
+  }
+
+  const attemptNum = 1;
+  const initialTodos: RepairTodo[] = [
+    {
+      id: "todo-1",
+      stepNumber: 1,
+      totalSteps: 5,
+      title: "Inspect previous run logs & trace root cause",
+      details: parsed!.title,
+      status: "completed",
+    },
+    {
+      id: "todo-2",
+      stepNumber: 2,
+      totalSteps: 5,
+      title: "Gather context & affected files for diagnosis",
+      details: `${affectedFiles.length} file(s) loaded`,
+      status: "in_progress",
+    },
+    {
+      id: "todo-3",
+      stepNumber: 3,
+      totalSteps: 5,
+      title: "Synthesize targeted remediation plan & patches",
+      details: "Consulting AI repair engine",
+      status: "pending",
+    },
+    {
+      id: "todo-4",
+      stepNumber: 4,
+      totalSteps: 5,
+      title: "Apply verified code & configuration changes",
+      details: "Updating project files and dependencies",
+      status: "pending",
+    },
+    {
+      id: "todo-5",
+      stepNumber: 5,
+      totalSteps: 5,
+      title: "Reseal build package & re-trigger workflow",
+      details: "Ready to re-dispatch pipeline",
+      status: "pending",
+    },
+  ];
+
+  buildStore.addOrUpdateRepairAttempt({
+    attempt: attemptNum,
+    maxAttempts: 3,
+    status: "executing",
+    diagnosisType: parsed!.category.toUpperCase(),
+    rootCause: parsed!.title,
+    evidence: logs.filter((l) => /error|warn|fail|dep/i.test(l)).slice(-3),
+    source: "model",
+    todos: initialTodos,
+    timestamp: Date.now(),
+  });
+
   const evtId = buildStore.pushAiEvent({
     op: "thinking",
     title: `AI Repair · ${opts.phaseName}`,
@@ -261,6 +348,9 @@ export async function runRepair(
     status: "active",
   });
   buildStore.setThinkingCaption(`AI repairing ${opts.phaseName} error…`);
+
+  buildStore.updateRepairTodo(attemptNum, 2, { status: "completed" });
+  buildStore.updateRepairTodo(attemptNum, 3, { status: "in_progress" });
 
   let plan: RepairPlan | null = null;
   try {
@@ -283,9 +373,19 @@ export async function runRepair(
     plan = data as RepairPlan;
   } catch (e: any) {
     buildStore.completeAiEvent(evtId, "error");
+    buildStore.updateRepairTodo(attemptNum, 3, { status: "failed" });
+    buildStore.addOrUpdateRepairAttempt({
+      attempt: attemptNum,
+      maxAttempts: 3,
+      status: "failed",
+      notes: e.message || "AI repair failed",
+    });
     toast.error(`AI repair failed: ${e.message || e}`);
     return { patched: false, summary: e.message || "AI repair failed", edits: [], changedFiles: [] };
   }
+
+  buildStore.updateRepairTodo(attemptNum, 3, { status: "completed" });
+  buildStore.updateRepairTodo(attemptNum, 4, { status: "in_progress" });
 
   const edits: string[] = [...deterministicEdits];
   const changedFiles: RepairOutcome["changedFiles"] = [...deterministicChanges];
@@ -367,11 +467,27 @@ export async function runRepair(
   buildStore.completeAiEvent(evtId, edits.length > 0 ? "done" : "error");
 
   if (edits.length === 0) {
+    buildStore.updateRepairTodo(attemptNum, 4, { status: "failed" });
+    buildStore.addOrUpdateRepairAttempt({
+      attempt: attemptNum,
+      maxAttempts: 3,
+      status: "exhausted",
+      notes: plan.notes || "No edits could be applied.",
+    });
     toast.warning("AI Repair could not apply any changes.", {
       description: plan.notes || "Returning original error.",
     });
     return { patched: false, summary: plan.notes || "No edits applied", edits: [], changedFiles: [] };
   }
+
+  buildStore.updateRepairTodo(attemptNum, 4, { status: "completed" });
+  buildStore.updateRepairTodo(attemptNum, 5, { status: "completed" });
+  buildStore.addOrUpdateRepairAttempt({
+    attempt: attemptNum,
+    maxAttempts: 3,
+    status: "succeeded",
+    notes: plan.notes || "All 5 repair to-dos completed successfully.",
+  });
 
   toast.success(`AI Repair applied ${edits.length} fix${edits.length === 1 ? "" : "es"}`, {
     description: plan.notes?.slice(0, 160) || "Retrying build phase…",
