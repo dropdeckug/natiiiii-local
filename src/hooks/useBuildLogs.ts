@@ -260,20 +260,27 @@ export function useBuildLogs(projectId: string | undefined, filters: LogFilters,
 
 /** Bucket rows into a fixed number of time buckets for the histogram strip. */
 export function bucketLogs(rows: BuildLogRow[], buckets = 48) {
-  if (rows.length === 0) return [] as { t: number; count: number; errors: number }[];
-  const times = rows.map((r) => new Date(r.ts).getTime());
+  const times = rows.map((r) => new Date(r.ts).getTime()).filter((t) => Number.isFinite(t));
+  if (times.length === 0) return [] as { t: number; count: number; errors: number }[];
   const min = Math.min(...times);
   const max = Math.max(...times);
   const span = Math.max(max - min, 1);
+
   const out = Array.from({ length: buckets }, (_, i) => ({
     t: min + (span / buckets) * i,
     count: 0,
     errors: 0,
   }));
   for (const r of rows) {
-    const idx = Math.min(buckets - 1, Math.floor(((new Date(r.ts).getTime() - min) / span) * buckets));
-    out[idx].count++;
-    if (r.level === "error") out[idx].errors++;
+    const t = new Date(r.ts).getTime();
+    if (!Number.isFinite(t)) continue;
+    const raw = Math.floor(((t - min) / span) * buckets);
+    const idx = Math.min(buckets - 1, Math.max(0, Number.isFinite(raw) ? raw : 0));
+    const bucket = out[idx];
+    if (!bucket) continue;
+    bucket.count++;
+    if (r.level === "error") bucket.errors++;
   }
+
   return out;
 }
