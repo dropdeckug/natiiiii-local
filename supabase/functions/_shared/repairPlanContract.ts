@@ -89,6 +89,17 @@ const DESTRUCTIVE_ALLOWED = new Set([
 
 const FORBIDDEN_PATH = /(^\/|^~|\.\.|^\.github(\/|$)|\.(keystore|jks|p12|pem|mobileprovision)$|^\.env)/;
 
+/** `npm pkg` subcommands the runner may use. */
+const MANIFEST_SUBCOMMANDS = new Set(["get", "set", "delete"]);
+
+/**
+ * package.json fields a repair plan may read or rewrite: only the dependency
+ * surface plus the overrides/resolutions escape hatches used to pin a peer.
+ */
+const MANIFEST_FIELD =
+  /^(dependencies|devDependencies|optionalDependencies|peerDependencies|overrides|resolutions)(\.[^.\s]+)*$/;
+
+
 export interface ValidationResult {
   ok: boolean;
   reason?: string;
@@ -132,6 +143,26 @@ export function validateCommand(cmd: unknown): ValidationResult {
     if (!script || FORBIDDEN_PATH.test(script)) return { ok: false, reason: "node script must be a workspace-relative file" };
   }
 
+  // `npm pkg` is the only sanctioned way to edit package.json on the runner.
+  // It is restricted to the dependency surface so a plan can drop or repin an
+  // unresolvable package (a mistyped or unpublished Capacitor plugin, a bad
+  // specifier) without being able to rewrite scripts, engines or anything else.
+  if (bin === "npm" && args[0] === "pkg") {
+    const sub = args[1];
+    if (!MANIFEST_SUBCOMMANDS.has(sub)) {
+      return { ok: false, reason: `npm pkg ${sub ?? ""} is not allowed (get/set/delete only)` };
+    }
+    const keys = args.slice(2).filter((a) => !a.startsWith("-"));
+    if (keys.length === 0) return { ok: false, reason: "npm pkg without a key" };
+    for (const k of keys) {
+      const field = k.split("=")[0];
+      if (!MANIFEST_FIELD.test(field)) {
+        return { ok: false, reason: `npm pkg key "${field}" is outside the dependency surface` };
+      }
+    }
+    return { ok: true, argv };
+  }
+
   for (const p of paths) {
     if (FORBIDDEN_PATH.test(p)) return { ok: false, reason: `path "${p}" escapes the workspace or is protected` };
   }
@@ -141,6 +172,7 @@ export function validateCommand(cmd: unknown): ValidationResult {
       return { ok: false, reason: "registry account commands are not allowed" };
     }
   }
+
 
   return { ok: true, argv };
 }
@@ -195,7 +227,54 @@ export function sanitizePlan(plan: RepairPlan): { plan: RepairPlan; rejected: { 
   return { plan: { ...plan, commands, verify, rollback, todos }, rejected };
 }
 
+/* ─────────────────────── registry / Capacitor knowledge ────────────────── */
+
+/**
+ * Package names that regularly appear in AI-generated manifests but are not
+ * published, mapped to the real package providing the same capability.
+ * Keeps a mistyped or hallucinated plugin from dead-ending a whole build.
+ */
+export const CAPACITOR_PLUGIN_ALIASES: Record<string, string> = {
+  "@capacitor/storage": "@capacitor/preferences",
+  "@capacitor/permissions": "@capacitor/core",
+  "@capacitor/notifications": "@capacitor/local-notifications",
+  "@capacitor/push-notification": "@capacitor/push-notifications",
+  "@capacitor/local-notification": "@capacitor/local-notifications",
+  "@capacitor/file": "@capacitor/filesystem",
+  "@capacitor/files": "@capacitor/filesystem",
+  "@capacitor/geo-location": "@capacitor/geolocation",
+  "@capacitor/status-bar-plugin": "@capacitor/status-bar",
+  "@capacitor/splashscreen": "@capacitor/splash-screen",
+  "@capacitor/barcode-scanner": "@capacitor-mlkit/barcode-scanning",
+  "@capacitor/bluetooth": "@capacitor-community/bluetooth-le",
+  "@capacitor/sqlite": "@capacitor-community/sqlite",
+  "@capacitor/http": "@capacitor/core",
+  "@capacitor/media": "@capacitor/camera",
+};
+
+/** Pulls the package names npm reported as unresolvable out of the real log. */
+export function extractUnresolvablePackages(log: string): string[] {
+  const names = new Set<string>();
+  const patterns = [
+    /404\s+Not Found[^\n]*?['"]?(@?[\w.-]+(?:\/[\w.-]+)?)['"]?@/gi,
+    /404\s+['"]?(@?[\w.-]+(?:\/[\w.-]+)?)@[^\s'"]+['"]?\s+is not in this registry/gi,
+    /notarget No matching version found for (@?[\w.-]+(?:\/[\w.-]+)?)@/gi,
+    /Invalid package name "([^"]+)"/gi,
+  ];
+  for (const re of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(log))) {
+      const name = (m[1] || "").trim();
+      // npm prints the registry path form (@scope%2fname) in some lines.
+      const clean = name.replace(/%2f/gi, "/").replace(/^\/+/, "");
+      if (clean && clean !== "npm" && !/^https?:/.test(clean)) names.add(clean);
+    }
+  }
+  return [...names].slice(0, 8);
+}
+
 /* ───────────────────────── deterministic classifier ────────────────────── */
+
 
 const pick = (log: string, re: RegExp, max = 3): string[] => {
   const out: string[] = [];
@@ -272,30 +351,72 @@ export function classifyInstallFailure(input: ClassifierInput): RepairPlan {
   }
 
   if (/E404|404 Not Found - GET|is not in this registry|Invalid package name|Unsupported URL Type/i.test(log)) {
+    const bad = extractUnresolvablePackages(log);
+    const rename = bad.map((name) => [name, CAPACITOR_PLUGIN_ALIASES[name]] as const).filter(([, to]) => !!to);
+    const drop = bad.filter((name) => !CAPACITOR_PLUGIN_ALIASES[name]);
+
+    const commands: RepairCommand[] = [
+      { step: 1, name: "Drop the lockfile", cmd: `rm -f ${lock}`, critical: false, why: "It pins tarball URLs the registry no longer serves" },
+    ];
+    for (const [from, to] of rename) {
+      commands.push({
+        step: commands.length + 1,
+        name: `Replace ${from} with ${to}`,
+        cmd: `npm pkg delete dependencies.${from}`,
+        critical: false,
+        why: `${from} is not published; ${to} is the maintained package for the same capability`,
+      });
+    }
+    for (const name of drop.slice(0, 3)) {
+      commands.push({
+        step: commands.length + 1,
+        name: `Quarantine unresolvable package ${name}`,
+        cmd: `npm pkg delete dependencies.${name}`,
+        critical: false,
+        why: "The registry has no such package, so no install can ever succeed while it is listed",
+      });
+    }
+    for (const [, to] of rename) {
+      commands.push({
+        step: commands.length + 1,
+        name: `Install ${to}`,
+        cmd: `npm install ${to} --no-audit --no-fund --legacy-peer-deps --save`,
+        critical: false,
+        why: "Restore the capability under its real package name",
+      });
+    }
+    commands.push({
+      step: commands.length + 1,
+      name: "Reinstall from the corrected manifest",
+      cmd: "npm install --no-audit --no-fund --legacy-peer-deps",
+      critical: true,
+      why: "Re-resolve every remaining specifier against the live registry",
+    });
+
     return {
       ...base,
       diagnosis: {
         type: "REGISTRY_404",
         severity: "high",
-        rootCause: "package.json references a package name or specifier the registry cannot serve.",
+        rootCause: bad.length
+          ? `package.json lists ${bad.join(", ")}, which the npm registry cannot serve.`
+          : "package.json references a package name or specifier the registry cannot serve.",
         evidence: pick(log, /E404|404 Not Found|not in this registry|Invalid package name|Unsupported URL Type/i),
       },
-      // A bad specifier is a manifest problem: the runner cannot invent the
-      // right name. Retry once without the lockfile, then hand back to the
-      // source-level repair agent.
-      commands: [
-        { step: 1, name: "Retry resolution from the manifest", cmd: `rm -f ${lock}`, critical: false, why: "The lockfile may pin a stale tarball URL" },
-        { step: 2, name: "Reinstall", cmd: "npm install --no-audit --no-fund --legacy-peer-deps", critical: true, why: "Re-resolve every specifier against the registry" },
-      ],
+      commands,
+      notes: drop.length
+        ? `Removed ${drop.join(", ")} from the manifest — no published package answers those names.`
+        : undefined,
       todos: makeTodos([
-        { title: "Inspect failed package specifiers against npm registry", details: "Identify unreachable package names or obsolete tarball URLs" },
+        { title: "Inspect failed package specifiers against npm registry", details: bad.length ? `Unresolvable: ${bad.join(", ")}` : "Identify unreachable package names or obsolete tarball URLs" },
         { title: "Clear stale lockfile pointers and cache references", details: "Remove old lockfile so npm queries the live registry directly", command: `rm -f ${lock}` },
+        { title: "Correct the manifest: rename or quarantine bad packages", details: rename.length ? `Rename ${rename.map(([f, t]) => `${f} → ${t}`).join(", ")}` : "Delete dependency entries the registry cannot serve" },
         { title: "Re-resolve and reinstall packages from public registry", details: "Fetch available package versions using legacy peer resolution", command: "npm install --no-audit --no-fund --legacy-peer-deps" },
-        { title: "Audit installed package versions in node_modules", details: "Ensure required packages and binaries exist on disk" },
         { title: "Verify workspace build readiness with npm ls", details: "Run depth check to confirm package availability", command: "npm ls --depth=0" },
       ]),
     };
   }
+
 
   if (/ENOENT|Cannot find module|no such file or directory/i.test(log)) {
     return {
@@ -452,6 +573,9 @@ const ALLOWED = ${JSON.stringify(ALLOWED_BINARIES)};
 const DESTRUCTIVE_ALLOWED = ${JSON.stringify([...DESTRUCTIVE_ALLOWED])};
 const SHELL_META = /[;&|` + "`" + `$><\n\r\\]|\|\||&&|\$\(/;
 const FORBIDDEN_PATH = /(^\/|^~|\.\.|^\.github(\/|$)|\.(keystore|jks|p12|pem|mobileprovision)$|^\.env)/;
+const MANIFEST_SUBCOMMANDS = ['get', 'set', 'delete'];
+const MANIFEST_FIELD = /^(dependencies|devDependencies|optionalDependencies|peerDependencies|overrides|resolutions)(\.[^.\s]+)*$/;
+
 
 const LOG = 'repair-execution.log';
 function log(line) {
@@ -474,7 +598,17 @@ function validate(cmd) {
       if (DESTRUCTIVE_ALLOWED.indexOf(clean) === -1) return 'rm target "' + p + '" is not a dependency artifact';
     }
   }
+  if (argv[0] === 'npm' && argv[1] === 'pkg') {
+    if (MANIFEST_SUBCOMMANDS.indexOf(argv[2]) === -1) return 'npm pkg ' + (argv[2] || '') + ' is not allowed (get/set/delete only)';
+    const keys = argv.slice(3).filter(function (a) { return a.indexOf('-') !== 0; });
+    if (!keys.length) return 'npm pkg without a key';
+    for (const k of keys) {
+      if (!MANIFEST_FIELD.test(k.split('=')[0])) return 'npm pkg key "' + k + '" is outside the dependency surface';
+    }
+    return null;
+  }
   for (const p of paths) if (FORBIDDEN_PATH.test(p)) return 'path "' + p + '" is protected';
+
   return null;
 }
 
@@ -675,13 +809,13 @@ async function main() {
     log('  ✓ [To-Do 5/5] completed');
 
     log('\n=== All 5 to-dos completed successfully. AI repair succeeded on attempt ' + attempt + ' (' + plan.diagnosis.type + ') ===');
-    await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: attempt, plan: plan, results: history, outcome: 'repaired' });
+    await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: attempt, plan: plan, results: history, outcome: 'repaired', packageJson: read('package.json', 60000), lockfileName: lockfileName() });
     process.exit(0);
   }
 
   log('\n=== AI repair exhausted — dependency installation could not be completed ===');
   log('NB_REPAIR_EXHAUSTED=' + (lastPlan ? lastPlan.diagnosis.type : 'UNKNOWN'));
-  await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: maxAttempts, plan: lastPlan, results: history, outcome: 'exhausted' });
+  await post('', { report: true, projectId: process.env.NB_PROJECT_ID || null, buildId: process.env.NB_BUILD_ID || null, phase: phase, attempt: maxAttempts, plan: lastPlan, results: history, outcome: 'exhausted', packageJson: read('package.json', 60000), lockfileName: lockfileName() });
   process.exit(1);
 }
 

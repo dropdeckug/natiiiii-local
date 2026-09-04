@@ -111,15 +111,45 @@ Hard rules:
 - Order commands so the state is valid at every step, and mark a command
   critical:true only when the repair is pointless if it fails.
 - Diagnose from evidence you can quote from the log. Do not guess.
-- If the log shows a source-level problem (bad package NAME, broken import,
-  invalid vite config) that no dependency command can fix, return an empty
-  commands array and explain it in notes — the source-level repair agent takes
-  over from there.
 - Never repeat a command sequence that already failed (it is given to you).
+
+You CAN edit package.json on the runner, through "npm pkg" only, and only on the
+dependency surface (dependencies, devDependencies, optionalDependencies,
+peerDependencies, overrides, resolutions). Use it exactly when the manifest
+itself is what the registry cannot satisfy:
+- "npm pkg delete dependencies.<name>" removes a package that does not exist in
+  the registry (a hallucinated or mistyped name). Never delete react,
+  react-dom, vite, typescript, @capacitor/core, @capacitor/cli or the framework
+  the app is built on — those are load-bearing; if one of them is unresolvable,
+  the version specifier is wrong, so repin it instead.
+- "npm pkg set dependencies.<name>=<range>" repins a bad or non-existent
+  version onto a published one (prefer a caret range on a major that exists).
+- "npm pkg set overrides.<name>=<range>" forces a single copy of a package that
+  peers disagree about.
+- "npm view <name> versions --json" and "npm view <name> version" tell you what
+  the registry actually has BEFORE you pin anything. Probe first, then pin.
+- "npm install <name>@<range> --no-audit --no-fund --legacy-peer-deps --save"
+  adds the corrected package back.
+
+Capacitor specifics, because most failures here are plugin failures:
+- Every @capacitor/* plugin must share the SAME major as @capacitor/core and
+  @capacitor/cli. A plugin from another major is the usual ERESOLVE cause —
+  repin the plugin to the core major rather than forcing the install.
+- Community plugins live under @capacitor-community/* or @capawesome/*, not
+  under @capacitor/*. A 404 on @capacitor/<something-exotic> almost always
+  means the real package is scoped elsewhere or does not exist.
+- Known bad → good renames you may apply directly:
+${Object.entries(CAPACITOR_PLUGIN_ALIASES).map(([f, t]) => `    ${f} → ${t}`).join("\n")}
+- A plugin that genuinely does not exist is not worth failing a whole build
+  for: delete it, say so in notes, and let the app build without it.
+- If the log shows a source-level problem (broken import, invalid vite config)
+  that no dependency command can fix, return an empty commands array and
+  explain it in notes — the source-level repair agent takes over from there.
 
 Diagnosis type must be one of: LOCKFILE_MISMATCH, DEPENDENCY_CONFLICT,
 MISSING_FILE, SCRIPT_FAILURE, REGISTRY_404, ENGINE_MISMATCH, NETWORK,
 DISK_SPACE, UNKNOWN.
+
 
 Crucial to-do requirement:
 You must provide a "todos" list containing EXACTLY five sequential to-dos (not more than five, and not less than five).
