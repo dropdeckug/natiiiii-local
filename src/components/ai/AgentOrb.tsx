@@ -104,10 +104,14 @@ const AgentOrb = ({
   const resolved: AgentOrbState =
     state ?? (hint ? inferOrbState(hint, kind ? orbStateForKind(kind) : "breathing") : kind ? orbStateForKind(kind) : "breathing");
 
+  // The library only ships presets for the 20 and 64 designs — anything else
+  // would index an undefined preset and crash the canvas engine.
+  const safeSize: 20 | 64 = size === 64 ? 64 : 20;
+
   return (
     <ThinkingOrb
       state={resolved}
-      size={size}
+      size={safeSize}
       speed={speed}
       paused={paused}
       theme="auto"
@@ -115,6 +119,7 @@ const AgentOrb = ({
       aria-label={label || `Agent ${resolved}`}
     />
   );
+
 };
 
 export default AgentOrb;

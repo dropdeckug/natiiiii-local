@@ -488,7 +488,7 @@ export const RepairLoopCard = ({
       >
         <div className="flex items-center gap-2 min-w-0">
           {isActive ? (
-            <AgentOrb state="weaving" size={16} className="shrink-0 w-3.5 h-3.5" />
+            <AgentOrb state="weaving" size={20} className="shrink-0 w-3.5 h-3.5" />
           ) : isSuccess ? (
             <Check size={13} className="shrink-0 text-[hsl(var(--success))]" strokeWidth={2.5} />
           ) : (
