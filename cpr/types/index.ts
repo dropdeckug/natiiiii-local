@@ -352,6 +352,7 @@ export interface SourceFinding {
     | "large-image"
     | "window-open"
     | "target-blank"
+    | "redirect-neutralized"
     | "web-only-ui";
   file: string;
   line?: number;

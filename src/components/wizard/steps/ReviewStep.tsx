@@ -57,6 +57,7 @@ const ReviewStep = ({
     ionic: "Ionic + Capacitor",
     twa: "TWA",
     electron: "Electron",
+    tauri: "Tauri",
   };
 
   const rows = [

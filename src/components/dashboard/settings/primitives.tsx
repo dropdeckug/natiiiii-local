@@ -1,10 +1,21 @@
-import { ReactNode } from "react";
+import { ComponentType, ReactNode } from "react";
 
 /** Page title + subtitle, Supabase settings style. */
-export const SettingsHeader = ({ title, description }: { title: string; description: string }) => (
-  <div className="mb-8">
-    <h1 className="text-xl font-normal text-foreground">{title}</h1>
-    <p className="text-sm text-muted-foreground mt-1">{description}</p>
+export const SettingsHeader = ({
+  title,
+  description,
+  icon: Icon,
+}: {
+  title: string;
+  description: string;
+  icon?: ComponentType<{ className?: string }>;
+}) => (
+  <div className="mb-8 flex items-start gap-3">
+    {Icon ? <Icon className="h-5 w-5 mt-0.5 text-muted-foreground shrink-0" /> : null}
+    <div>
+      <h1 className="text-xl font-normal text-foreground">{title}</h1>
+      <p className="text-sm text-muted-foreground mt-1">{description}</p>
+    </div>
   </div>
 );
 

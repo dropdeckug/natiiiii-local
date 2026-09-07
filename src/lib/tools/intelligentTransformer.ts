@@ -15,7 +15,7 @@
  * 8. Peer dependencies, React 18/19 bridges, and Capacitor core plugins are harmonized.
  */
 
-import type { CprFile } from "../../cpr/types/index";
+import type { CprFile } from "../../../cpr/types/index";
 
 export interface ProjectHarmonizationResult {
   patches: { path: string; content: string; reason: string }[];
