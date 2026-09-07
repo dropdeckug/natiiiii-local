@@ -3,12 +3,14 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2.58.0";
 import { DEFAULT_MODEL, gatewayJson } from "../_shared/aiGateway.ts";
 import {
   ALLOWED_BINARIES,
+  CAPACITOR_PLUGIN_ALIASES,
   classifyInstallFailure,
   makeTodos,
   planSignature,
   sanitizePlan,
   type RepairPlan,
 } from "../_shared/repairPlanContract.ts";
+
 
 /**
  * Runner-executed AI repair — the analyst endpoint.
@@ -292,7 +294,13 @@ Deno.serve(async (req) => {
         diagnosis: body.plan?.diagnosis ?? null,
         commands: (body.plan?.commands ?? []).map((c) => c.cmd),
         results: (body.results ?? []).map((r) => ({ cmd: r.cmd, exitCode: r.exitCode, tail: tail(r.tail, 1200) })),
+        // The runner may have rewritten package.json (dropping an unpublished
+        // plugin, repinning a specifier). Carry the repaired manifest back so
+        // the platform can persist it instead of re-dispatching the broken one.
+        repairedManifest: typeof body.packageJson === "string" ? body.packageJson.slice(0, 60000) : null,
+        lockfileName: body.lockfileName ?? null,
       },
+
     });
     return json({ ok: true });
   }

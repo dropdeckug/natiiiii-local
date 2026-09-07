@@ -30,6 +30,7 @@ import { PLATFORM_CAPACITOR_MAJOR } from "../../cpr/versions/index";
 
 import { planProjectGrounding } from "@/lib/tools/projectIndexer";
 import { setLogContext, logEvent, importCiLogs, flushLogs, fetchErrorContext } from "@/lib/logs/logSink";
+import { escalateBuildFailure } from "@/lib/repair/escalate";
 
 
 export function resetNormalizationGuard() {
@@ -876,11 +877,21 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
       console.warn("Phase 1 source sync skipped:", e);
     }
   } catch (err: any) {
-    toast.error(`Phase 1 failed: ${err.message || err}`);
+    // Every failure goes to the AI with the real output, not just a toast.
+    const detail = String(err?.fullLog || err?.message || err);
+    const outcome = await escalateBuildFailure({
+      errorText: detail,
+      stepName: "install",
+      errorType: parseBuildError([detail])?.category,
+      projectId: opts.projectId,
+      buildId: null,
+      runId: phase1Run ?? null,
+      phase: "phase-1",
+    });
     buildStore.setIsBuildActive(false);
     buildStore.setBuildButtonState("failed");
     buildStore.setThinkingCaption(null);
-    endRun("failed", String(err?.message || err).slice(0, 240));
+    endRun("failed", outcome.userSummary.slice(0, 240) || String(err?.message || err).slice(0, 240));
     return;
   }
 
@@ -1535,9 +1546,23 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
     } catch (verificationError) {
       console.warn("[cpr] could not persist failed verification:", verificationError);
     }
-    toast.error(`Phase 3 failed: ${detail.slice(0, 240)}`, {
-      description: detail.length > 240 ? "See the action panel for the full failing-step log." : undefined,
+    // Hand the real failing-step output to the repair agent instead of
+    // stopping at a toast the user can do nothing with.
+    const failingStep = parseBuildError([detail])?.category === "dependency" ? "install" : "build";
+    const escalation = await escalateBuildFailure({
+      errorText: detail,
+      stepName: failingStep,
+      errorType: parseBuildError([detail])?.category,
+      projectId: opts.projectId,
+      buildId: null,
+      runId: phase1Run ?? null,
+      phase: "phase-3",
     });
+    if (!escalation.retryWorthwhile) {
+      toast.error(`Build failed: ${escalation.userSummary.slice(0, 200) || detail.slice(0, 200)}`, {
+        description: detail.length > 200 ? "See the action panel for the full failing-step log." : undefined,
+      });
+    }
     buildStore.setBuildButtonState("failed");
     buildStore.setThinkingCaption(null);
     endRun("failed", detail.slice(0, 240));
