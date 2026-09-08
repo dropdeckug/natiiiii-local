@@ -8,6 +8,10 @@ describe("Code Repair Tools & Capabilities", () => {
     const store = useProjectStore.getState();
     store.setFiles([
       {
+        id: "package.json",
+
+        name: "package.json",
+
         path: "package.json",
         type: "file",
         content: JSON.stringify(
@@ -22,16 +26,28 @@ describe("Code Repair Tools & Capabilities", () => {
         ),
       },
       {
+        id: "vite.config.ts",
+
+        name: "vite.config.ts",
+
         path: "vite.config.ts",
         type: "file",
         content: `import { defineConfig } from "vite";\nimport react from "@vitejs/plugin-react";\n\nexport default defineConfig({\n  plugins: [react()],\n});\n`,
       },
       {
+        id: "src/App.tsx",
+
+        name: "App.tsx",
+
         path: "src/App.tsx",
         type: "file",
         content: `import React from "react";\n\nexport function App() {\n  return <div>Hello World</div>;\n}\n`,
       },
       {
+        id: "package-lock.json",
+
+        name: "package-lock.json",
+
         path: "package-lock.json",
         type: "file",
         content: `{"name": "test-app", "lockfileVersion": 3}`,
@@ -67,6 +83,10 @@ describe("Code Repair Tools & Capabilities", () => {
     const res = await executeRepairTool(
       "patch_file",
       {
+        id: "src/App.tsx",
+
+        name: "App.tsx",
+
         path: "src/App.tsx",
         old_text: "Hello World",
         new_text: "Hello NativeForge",
@@ -176,9 +196,9 @@ describe("Code Repair Tools & Capabilities", () => {
   });
 
   it("marks all valid error categories repairable in isRepairable", () => {
-    expect(isRepairable({ category: "missing-module", title: "Missing module", detail: "", autoFixable: true })).toBe(true);
-    expect(isRepairable({ category: "dependency", title: "Dep issue", detail: "", autoFixable: false })).toBe(true);
-    expect(isRepairable({ category: "vite-config", title: "Vite error", detail: "", autoFixable: true })).toBe(true);
-    expect(isRepairable({ category: "ts-error", title: "TypeScript error", detail: "", autoFixable: true })).toBe(true);
+    expect(isRepairable({ category: "missing-module", title: "Missing module", detail: "", autoFixable: true, suggestedFix: "", severity: "error" })).toBe(true);
+    expect(isRepairable({ category: "dependency", title: "Dep issue", detail: "", autoFixable: false, suggestedFix: "", severity: "error" })).toBe(true);
+    expect(isRepairable({ category: "vite-config", title: "Vite error", detail: "", autoFixable: true, suggestedFix: "", severity: "error" })).toBe(true);
+    expect(isRepairable({ category: "ts-error", title: "TypeScript error", detail: "", autoFixable: true, suggestedFix: "", severity: "error" })).toBe(true);
   });
 });

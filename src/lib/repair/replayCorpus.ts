@@ -305,7 +305,9 @@ function flattenFiles(nodes: any[]): any[] {
 /** Sets up the project store with a fixture's initial file tree. */
 export function loadFixtureIntoStore(fixture: ReplayFixture): void {
   const store = useProjectStore.getState();
-  const files: ProjectFile[] = fixture.initialFiles.map((f) => ({
+  const files: ProjectFile[] = fixture.initialFiles.map((f, i) => ({
+    id: `fixture-${i}`,
+    name: f.path.split("/").pop() || f.path,
     path: f.path,
     type: "file",
     content: f.content,

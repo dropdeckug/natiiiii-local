@@ -49,6 +49,8 @@ export interface RepairAgentInput {
   model?: string;
   /** Re-runs ONLY the failing step. */
   verifyStep: (step: string) => Promise<{ ok: boolean; output: string }>;
+  /** Optional live progress callback for the build timeline. */
+  onActivity?: (description: string, kind?: "investigate" | "patch" | "verify") => void;
 }
 
 export interface RepairAgentResult {

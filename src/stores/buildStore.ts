@@ -83,7 +83,7 @@ export interface RepairAttemptInfo {
   results?: RepairCommandResult[];
   todos?: RepairTodo[];
   notes?: string;
-  timestamp: number;
+  timestamp?: number;
 }
 
 export interface AiTimelineEvent {
@@ -268,8 +268,9 @@ export const useBuildStore = create<BuildStore>((set, get) => ({
     })),
   clearAiTimeline: () => set({ aiTimeline: [] }),
   setRepairAttempts: (attempts) => set({ repairAttempts: attempts }),
-  addOrUpdateRepairAttempt: (attempt) =>
+  addOrUpdateRepairAttempt: (incoming) =>
     set((s) => {
+      const attempt = { ...incoming, timestamp: incoming.timestamp ?? Date.now() };
       const idx = s.repairAttempts.findIndex((a) => a.attempt === attempt.attempt);
       if (idx === -1) {
         return { repairAttempts: [...s.repairAttempts, attempt] };

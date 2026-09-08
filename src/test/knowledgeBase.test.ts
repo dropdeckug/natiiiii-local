@@ -96,11 +96,19 @@ describe("Knowledge Base & Compounding Knowledge (Stage 3)", () => {
     const store = useProjectStore.getState();
     store.setFiles([
       {
+        id: "package.json",
+
+        name: "package.json",
+
         path: "package.json",
         type: "file",
         content: JSON.stringify({ name: "app", version: "1.0.0", dependencies: {} }, null, 2),
       },
       {
+        id: "src/index.ts",
+
+        name: "index.ts",
+
         path: "src/index.ts",
         type: "file",
         content: `import { clsx } from "clsx";\nconsole.log(clsx);`,
@@ -129,7 +137,7 @@ describe("Knowledge Base & Compounding Knowledge (Stage 3)", () => {
       errorType: "dependency",
       verifyStep: async () => {
         stepRan = true;
-        const pkg = store.files.find((f) => f.path === "package.json")?.content || "";
+        const pkg = useProjectStore.getState().files.find((f) => f.path === "package.json")?.content || "";
         const hasDep = pkg.includes('"clsx"');
         return hasDep
           ? { ok: true, output: "Build passed with clsx installed" }

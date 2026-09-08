@@ -136,6 +136,7 @@ describe("sanitizePlan", () => {
         rootCause: "test",
         evidence: [],
       },
+      todos: [],
       commands: [
         { step: 1, name: "Legit install", cmd: "npm install --legacy-peer-deps", critical: true, why: "safe" },
         { step: 2, name: "Dangerous rm", cmd: "rm -rf /", critical: false, why: "bad" },
