@@ -178,7 +178,7 @@ function sourceFiles(dir, out) {
   for (const e of entries) { const f = path.join(dir, e.name); if (e.isDirectory() && e.name !== 'node_modules') sourceFiles(f, out); else if (/\.(m?js|jsx|ts|tsx)$/.test(e.name)) out.push(f); }
   return out;
 }
-function packageName(spec) { if (!spec || /^[.\/]|^node:|^@\//.test(spec)) return null; const p = spec.split('/'); return spec[0] === '@' ? p.slice(0, 2).join('/') : p[0]; }
+function packageName(spec) { if (!spec || /^[.\/]|^node:|^virtual:|^data:|^https?:|^@\/|^~\/|^#|^\$\//.test(spec)) return null; const s = String(spec).trim().replace(/^npm:/, ''); if (s.startsWith('@/') || s.startsWith('~/') || s.startsWith('#') || s.startsWith('$/') || s.startsWith('~')) return null; const p = s.split('/'); return s.startsWith('@') ? (p.length >= 2 ? p.slice(0, 2).join('/') : null) : p[0]; }
 function exportedNames(manifest) {
   const names = new Set();
   for (const key of ['exports', 'types', 'typings', 'main', 'module']) { const v = manifest && manifest[key]; if (typeof v === 'string') { const text = readText(path.join(NM, manifest.name || '', v)); (text.match(/export\s+(?:declare\s+)?(?:const|function|class|interface|type)\s+([A-Za-z_$][\w$]*)/g) || []).forEach(x => names.add(x.replace(/^.*\s/, ''))); } }

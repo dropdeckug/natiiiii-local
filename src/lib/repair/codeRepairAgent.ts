@@ -23,6 +23,7 @@ import {
 } from "./tools";
 import {
   buildSignature,
+  extractSubject,
   fixConfidence,
   HIGH_CONFIDENCE,
   lookupKnownFix,
@@ -181,23 +182,67 @@ async function tryKnownFix(
   walk(store.files as any[]);
 
   let applied = 0;
+
+  // 1. Apply dependencies if declared in known fix
+  if (fix.dependencies && Object.keys(fix.dependencies).length > 0) {
+    for (const [depName, depVer] of Object.entries(fix.dependencies)) {
+      const depRes = await executeRepairTool(
+        "set_dependency",
+        { name: depName, version: depVer },
+        { state, verifyStep: ctx.verifyStep },
+      );
+      if (depRes.startsWith("SUCCESS")) applied++;
+    }
+  }
+
+  // 2. Apply code and config patches
   for (const patch of fix.patches) {
+    const hasOldText = typeof patch.oldText === "string" && patch.oldText.trim().length > 0;
     const target =
       flat.find((f) => f.path === patch.path && typeof f.content === "string") ||
-      flat.find((f) => typeof f.content === "string" && f.content.includes(patch.oldText));
-    if (!target?.content) continue;
-    if (target.content.split(patch.oldText).length - 1 !== 1) continue;
-    state.inspected.add(target.path);
-    const result = await executeRepairTool(
-      "patch_file",
-      { path: target.path, old_text: patch.oldText, new_text: patch.newText },
-      { state, verifyStep: ctx.verifyStep },
-    );
-    if (result.startsWith("SUCCESS")) applied++;
+      (hasOldText ? flat.find((f) => typeof f.content === "string" && f.content.includes(patch.oldText)) : undefined);
+
+    if (target?.content) {
+      if (patch.newText === "" && (patch.oldText === target.content || (hasOldText && target.content.includes(patch.oldText)) || !patch.oldText)) {
+        // File deletion
+        const delRes = await executeRepairTool(
+          "delete_file",
+          { path: target.path },
+          { state, verifyStep: ctx.verifyStep },
+        );
+        if (delRes.startsWith("SUCCESS")) applied++;
+      } else if (!hasOldText || patch.oldText === target.content) {
+        // Complete file rewrite
+        state.inspected.add(target.path);
+        const writeRes = await executeRepairTool(
+          "write_file",
+          { path: target.path, content: patch.newText },
+          { state, verifyStep: ctx.verifyStep },
+        );
+        if (writeRes.startsWith("SUCCESS")) applied++;
+      } else if (hasOldText && target.content.includes(patch.oldText)) {
+        state.inspected.add(target.path);
+        const result = await executeRepairTool(
+          "patch_file",
+          { path: target.path, old_text: patch.oldText, new_text: patch.newText },
+          { state, verifyStep: ctx.verifyStep },
+        );
+        if (result.startsWith("SUCCESS")) applied++;
+      }
+    } else if (!target && patch.newText) {
+      // Missing file write
+      const writeRes = await executeRepairTool(
+        "write_file",
+        { path: patch.path, content: patch.newText },
+        { state, verifyStep: ctx.verifyStep },
+      );
+      if (writeRes.startsWith("SUCCESS")) applied++;
+    }
   }
+
   if (applied === 0) return false;
 
-  push(ctx, "note", `Applied ${applied} known fix patch(es) from the knowledge base`);
+  push(ctx, "note", `Applied ${applied} known fix action(s) from the knowledge base`);
   await callback(ctx, "known-fix", "running", `Applying a previously proven fix for this error (seen ${fix.hitCount}×)`);
   const verdict = await ctx.verifyStep(ctx.stepName);
   push(ctx, "verify", `Known fix verification: ${verdict.ok ? "passed" : "failed"}`, verdict.output);
@@ -208,16 +253,28 @@ async function tryKnownFix(
 
 const SYSTEM_PROMPT = `You are the ForgeAI Code Repair Agent. A NativeForge build failed and the standard automated fixes could not resolve it. You investigate the real failing code and make precise surgical edits.
 
+Grounding priority (FIXED ORDER — non-negotiable):
+1. package.json (dependencies, specifiers, scripts, type, engines)
+2. bundler config (vite.config.*, tsconfig*.json, svelte/astro/tailwind configs)
+3. index.html / entry module + path aliases
+4. env usage (.env.example, fallback guards) and hardcoded URLs
+5. public assets, manifest.json, service worker
+6. Application source (src/**) LAST, and ONLY when the build error explicitly names that file.
+
 Rules you must obey:
 1. Ground every fix in code you actually read. Never patch based on the error message alone.
-2. Call get_platform_context once at the start.
+2. Call get_platform_context once at the start to understand the runtime conventions.
 3. Use inspect / search_code / read_lines / list_files / get_file_structure to locate the exact cause.
 4. Before patching a file you MUST have read it in this session (get_file_structure, read_lines or search_code).
 5. patch_file takes a verbatim old_text that occurs exactly once. If it fails, re-read the file and retry with the exact current text.
-6. After a patch, call run_build_check with the failing step name to verify.
-7. Fix build breakage only — missing imports, wrong types, missing dependencies, incorrect Gradle/Capacitor config, selector typos. NEVER redesign features or change what a component does, what data it fetches, or how it responds to the user, unless the error output traces the build failure to that exact logic.
-8. You may never touch .github/workflows/** or cpr/** or any secret/keystore/.env file. If you conclude the bug is in the platform's own pipeline, STOP, do not patch anything, and reply with the single line "PLATFORM_BUG: <explanation>".
-9. When run_build_check reports success, reply with a short plain-English summary of what was wrong and what you changed. No tool call.`;
+6. For package additions/updates, prefer set_dependency or run_command ('npm install <pkg>', 'npm pkg set <k>=<v>').
+7. For path alias resolution errors (@/* not found), use fix_alias_sync.
+8. For uncommitted/missing referenced modules that break compilation, use stub_missing_module.
+9. To clear conflicting lockfiles that break install, use delete_file on package-lock.json/bun.lockb/yarn.lock.
+10. After a patch, call run_build_check with the failing step name to verify.
+11. Fix build breakage only — missing imports, wrong types, missing dependencies, incorrect Gradle/Capacitor config, selector typos. NEVER redesign features or change what a component does, what data it fetches, or how it responds to the user, unless the error output traces the build failure to that exact logic.
+12. You may never touch .github/workflows/** or cpr/** or any secret/keystore file. If you conclude the bug is in the platform's own pipeline, STOP, do not patch anything, and reply with the single line "PLATFORM_BUG: <explanation>".
+13. When run_build_check reports success, reply with a short plain-English summary of what was wrong and what you changed. No tool call.`;
 
 export async function runCodeRepairAgent(input: RepairAgentInput): Promise<RepairAgentResult> {
   const buildStore = useBuildStore.getState();
@@ -281,8 +338,15 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
   }
 
   // ── Fast path 2: a fix for this exact signature is already known in knowledge base. ──
-  const known = await lookupKnownFix(signature);
-  if (known && fixConfidence(known) >= HIGH_CONFIDENCE && known.patches.length > 0) {
+  const known = await lookupKnownFix(signature, {
+    errorType,
+    subject: extractSubject(input.errorText) || undefined,
+  });
+  if (
+    known &&
+    fixConfidence(known) >= HIGH_CONFIDENCE &&
+    (known.patches.length > 0 || Object.keys(known.dependencies || {}).length > 0)
+  ) {
     push(ctx, "note", `Knowledge base hit (confidence ${fixConfidence(known)})`, known.summary || undefined);
     const ok = await tryKnownFix(ctx, known, state);
     if (ok) {
@@ -312,6 +376,7 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
 
   let attempts = 0;
   let lastAssistant = "";
+  const seenPatchSignatures = new Set<string>();
 
   const deps = {
     state,
@@ -396,6 +461,19 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
         args = {};
       }
       let result: string;
+      if (name === "patch_file") {
+        const pKey = `${args.path || args.file_path}::${args.old_text}::${args.new_text}`;
+        if (seenPatchSignatures.has(pKey)) {
+          push(ctx, "note", `Stopping: identical patch to ${args.path || args.file_path} attempted twice without progress.`);
+          return finish(
+            "escalated",
+            Math.max(attempts, 1),
+            `Automatic repair stopped: identical patch to "${args.path || args.file_path}" attempted twice without making progress on the failing step. The build needs manual review.`,
+          );
+        }
+        seenPatchSignatures.add(pKey);
+      }
+
       if (name === "run_build_check") {
         attempts++;
         result = await executeRepairTool(name, args, deps);

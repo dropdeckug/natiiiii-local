@@ -9,6 +9,10 @@
  */
 
 import type { PeerDependencyAddition, BuildRetryResult } from "../types/index.ts";
+import { packageFromSpecifier } from "../specifier-policy.ts";
+import { computeStderrFingerprint, hasProgress } from "../../supabase/functions/_shared/resilienceLogic.ts";
+
+export { packageFromSpecifier };
 
 export const MAX_AUTO_BUILD_RETRIES = 5;
 
@@ -21,23 +25,6 @@ const UNRESOLVED_PATTERNS: RegExp[] = [
 
 export function outputSignalsMissingModule(output: string): boolean {
   return /failed to resolve import|cannot find module|module not found/i.test(output ?? "");
-}
-
-/** Turn an import specifier into the npm package it belongs to, or null. */
-export function packageFromSpecifier(spec: string): string | null {
-  if (!spec) return null;
-  if (/^[./]|^node:|^virtual:|^data:|^https?:|^@\/|^~\//.test(spec)) return null;
-  const parts = spec.split("/");
-  const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-  if (!name || name.length > 214) return null;
-  
-  // Strict npm package name validation
-  // Cannot contain spaces, uppercase letters, or special chars like brackets/quotes
-  if (!/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(name)) {
-    return null;
-  }
-  
-  return name;
 }
 
 /** Extract the first unresolved package name from build error output. */
@@ -74,6 +61,7 @@ export async function buildWithAutoRetry(
 ): Promise<BuildRetryResult> {
   const result = emptyBuildRetryResult();
   const added: PeerDependencyAddition[] = [];
+  let lastFingerprint: string | null = null;
 
   try {
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -85,6 +73,13 @@ export async function buildWithAutoRetry(
         return result;
       }
       result.finalError = build.output;
+
+      const fingerprint = computeStderrFingerprint(build.output, "build");
+      if (!hasProgress(lastFingerprint, fingerprint)) {
+        result.finalError = `${build.output}\n[cpr:retry] No-progress guard triggered: identical stderr fingerprint across build attempts.`;
+        break;
+      }
+      lastFingerprint = fingerprint;
 
       if (attempt === maxRetries) break;
       if (!outputSignalsMissingModule(build.output)) break;

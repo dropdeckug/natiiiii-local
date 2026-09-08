@@ -340,9 +340,19 @@ function applyModuleFix(mod) {
 }
 
 function packageFromSpecifier(spec) {
-  if (!spec || /^[./]|^node:|^virtual:|^data:|^https?:|^@\\//.test(spec)) return null;
-  const parts = spec.split('/');
-  return spec.startsWith('@') ? parts.slice(0, 2).join('/') : parts[0];
+  if (!spec || /^[./]|^node:|^virtual:|^data:|^https?:|^@\\/|^~\\/|^#|^\\$\\//.test(spec)) return null;
+  var s = String(spec).trim().replace(/^npm:/, '');
+  if (s.startsWith('@/') || s.startsWith('~/') || s.startsWith('#') || s.startsWith('$/') || s.startsWith('~')) return null;
+  var parts = s.split('/');
+  var name = s.startsWith('@') ? (parts.length >= 2 ? parts.slice(0, 2).join('/') : null) : parts[0];
+  if (!name) return null;
+  name = name.split('@')[0];
+  var builtins = { fs:1, path:1, os:1, crypto:1, http:1, https:1, stream:1, util:1, events:1, url:1, buffer:1, child_process:1, net:1, tls:1, zlib:1, cluster:1, dgram:1, dns:1, readline:1, repl:1, string_decoder:1, timers:1, tty:1, v8:1, vm:1, wasi:1, worker_threads:1, assert:1, constants:1, perf_hooks:1, async_hooks:1, punycode:1 };
+  if (builtins[name]) return null;
+  if (!/^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/.test(name)) return null;
+  var base = name.startsWith('@') ? name.split('/')[1] : name;
+  if (!base || base.startsWith('.') || base.startsWith('_')) return null;
+  return name;
 }
 
 function extractMissing(output) {
@@ -360,11 +370,21 @@ function extractMissing(output) {
   return null;
 }
 
+var lastFingerprint = null;
+
 for (let attempt = 0; attempt <= MAX; attempt++) {
   const build = run(CMD);
   report.attempts = attempt + 1;
   if (build.ok) { report.succeeded = true; save(); process.exit(0); }
   report.finalError = build.output.slice(-4000);
+
+  var fp = (build.output || '').toLowerCase().replace(/\\d{4}-\\d{2}-\\d{2}t[\\d:.+-]+z?/gi, '').replace(/\\b[0-9a-f]{7,64}\\b/gi, '').replace(/\\s+/g, ' ').trim().slice(-1200);
+  if (lastFingerprint && lastFingerprint === fp) {
+    console.warn('[cpr:retry] No-progress guard triggered: identical stderr fingerprint across build attempts.');
+    break;
+  }
+  lastFingerprint = fp;
+
   if (attempt === MAX) break;
   const mod = detectModuleError(build.output);
   if (mod && !report.module_errors_auto_fixed.some(function (x) { return x.pattern === mod.pattern; })) {

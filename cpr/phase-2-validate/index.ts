@@ -3,6 +3,7 @@ import { PLATFORM_CAPACITOR_MAJOR, PLATFORM_NODE_VERSION, PLATFORM_RELEASE } fro
 import { readJson, sourceFiles } from "../phase-1-detect/index.ts";
 import { CAPACITOR_DEPENDENCIES, CAPACITOR_DEV_DEPENDENCIES } from "../templates/index.ts";
 import { parseConfigReferencedPackages, parseModuleSpecifiers } from "../parse/index.ts";
+import { packageFromSpecifier, packageNameOf } from "../specifier-policy.ts";
 import { resolvePlugins } from "./plugin-conflicts.ts";
 import {
   alignCapacitorVersions,
@@ -60,24 +61,11 @@ const KNOWN_INCOMPATIBILITIES: {
   },
 ];
 
-const IGNORED_IMPORT_PREFIXES = ["@/", "~/", ".", "/", "node:", "virtual:", "data:", "http"];
-
-const NODE_BUILTINS = new Set([
-  "fs", "path", "os", "crypto", "http", "https", "stream", "util", "events", "url", "buffer", "child_process",
-]);
-
 export function extractImports(content: string, filename = "file.ts"): string[] {
   return parseModuleSpecifiers(content, filename);
 }
 
-
-export function packageNameOf(spec: string): string | null {
-  if (IGNORED_IMPORT_PREFIXES.some((p) => spec.startsWith(p))) return null;
-  const parts = spec.split("/");
-  const name = spec.startsWith("@") ? parts.slice(0, 2).join("/") : parts[0];
-  if (!name || NODE_BUILTINS.has(name)) return null;
-  return name;
-}
+export { packageFromSpecifier, packageNameOf };
 
 export const LOCK_FILES: Record<PackageManager, string> = {
   npm: "package-lock.json",

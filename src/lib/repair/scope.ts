@@ -7,20 +7,41 @@
  */
 
 const ALLOWED: RegExp[] = [
-  /^src\/.+/,
+  // Application source
+  /^(?:.*\/)?src\/.+/,
+  /^(?:.*\/)?app\/.+/,
+  /^(?:.*\/)?components\/.+/,
+  /^(?:.*\/)?pages\/.+/,
+  /^(?:.*\/)?lib\/.+/,
+  /^(?:.*\/)?hooks\/.+/,
+  /^(?:.*\/)?styles\/.+/,
+  /^(?:.*\/)?utils\/.+/,
+  // Native configuration
   /^android\/app\/src\/main\/.+/,
   /^android\/(?:[^/]+\/)*build\.gradle$/,
   /^android\/build\.gradle$/,
   /^android\/variables\.gradle$/,
   /^ios\/App\/App\/Info\.plist$/,
   /^ios\/App\/App\/.+/,
-  /^package\.json$/,
-  /^capacitor\.config\.(?:json|ts|js)$/,
-  /^vite\.config\.(?:ts|js)$/,
-  /^tsconfig\.json$/,
-  /^tsconfig\.node\.json$/,
-  /^tsconfig\.app\.json$/,
-  /^\.npmrc$/,
+  // Manifests & package configs
+  /^(?:.*\/)?package\.json$/,
+  /^(?:.*\/)?\.npmrc$/,
+  // Entry HTML
+  /^(?:.*\/)?index\.html$/,
+  // Bundler & framework configs
+  /^(?:.*\/)?capacitor\.config\.(?:json|ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?vite\.config\.(?:ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?svelte\.config\.(?:ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?astro\.config\.(?:ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?tailwind\.config\.(?:ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?postcss\.config\.(?:ts|js|mjs|cjs)$/,
+  /^(?:.*\/)?tsconfig(?:\.[\w.-]+)?\.json$/,
+  // Assets, manifest, service worker
+  /^(?:.*\/)?public\/.+/,
+  /^(?:.*\/)?manifest\.(?:json|webmanifest)$/,
+  /^(?:.*\/)?(?:sw|service-worker)\.(?:js|ts)$/,
+  // Safe environment templates
+  /^(?:.*\/)?\.env(?:\.example|\.local|\.defaults)?$/,
 ];
 
 const FORBIDDEN: RegExp[] = [
@@ -28,17 +49,16 @@ const FORBIDDEN: RegExp[] = [
   /(^|\/)cpr\//,
   /(^|\/)\.\.(\/|$)/,
   /vault|credential|keystore|secret/i,
-  /^\.env(\.|$)/,
-  /(^|\/)\.env(\.|$)/,
   /\.(jks|p12|pem|key|mobileprovision)$/i,
-  /^package-lock\.json$|^bun\.lockb?$|^yarn\.lock$/,
+  // Backend directories must not be touched
+  /(^|\/)(backend|server)\//,
 ];
 
 export const SCOPE_REJECTION =
   "This file is outside the repair agent's permitted scope. Focus only on the project's source code " +
-  "(src/**), native configuration (android/**, ios/App/App/**), and the project manifests " +
-  "(package.json, capacitor.config.json, vite.config.ts, tsconfig*.json, .npmrc). " +
-  "The platform's CI workflows and CPR pipeline can never be modified.";
+  "(src/**), bundler configs (vite.config.*, tsconfig*.json), native configuration (android/**, ios/App/App/**), " +
+  "and web manifests (package.json, index.html, public/**). " +
+  "Workflows, secrets, keystores, and backend directories can never be modified.";
 
 /** Normalize a path the model produced (strip leading ./ or /). */
 export function normalizePath(p: string): string {

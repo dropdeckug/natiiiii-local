@@ -64,10 +64,9 @@ export const DETERMINISTIC_FIXES: DeterministicFix[] = [
     id: "vite-rollup-base-fix",
     name: "Harmonize Vite base path to relative './'",
     match: (err) =>
-      err.includes("Rollup failed to resolve import") ||
       err.includes("Failed to load url /") ||
       err.includes("net::ERR_FILE_NOT_FOUND") ||
-      err.includes("Uncaught SyntaxError: Cannot use import statement outside a module"),
+      (err.includes("ERR_FILE_NOT_FOUND") && err.includes("/assets/")),
     apply: (files) => {
       const patches: { path: string; content: string; reason: string }[] = [];
       const viteConfig = files.find((f) => /vite\.config\.(ts|js|mjs)$/.test(f.path));

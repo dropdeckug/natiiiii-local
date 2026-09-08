@@ -9,13 +9,13 @@
 
 import { quickScan } from "../../../cpr/phase-1-detect/index.ts";
 import { auditDependencies, gradleResolutionSnippet, installCommandFor } from "../../../cpr/phase-2-validate/index.ts";
-import { transformSource, isExcluded } from "../../../cpr/phase-3-transform/index.ts";
+import { transformSource, isExcluded, syncViteAliases } from "../../../cpr/phase-3-transform/index.ts";
 import { ensureTypescriptConfig, emptyTsconfigResult } from "../../../cpr/phase-3-transform/tsconfig.ts";
 import { normalizeModuleSystem, emptyModuleSystemResult } from "../../../cpr/phase-3-transform/module-system.ts";
 import { harmonizeProjectStructure } from "@/lib/tools/intelligentTransformer";
 import { analyzeCprFilesWithAI } from "@/lib/tools/aiProjectAnalyzer";
 import { buildPreflightReport } from "../../../cpr/phase-5-report/index.ts";
-import { emptyVerifyResult, MAX_AUTO_BUILD_RETRIES } from "../../../cpr/phase-4-verify/index.ts";
+import { emptyVerifyResult } from "../../../cpr/phase-4-verify/index.ts";
 import { PLATFORM_CAPACITOR_MAJOR, PLATFORM_NODE_VERSION, PLATFORM_RELEASE } from "../../../cpr/versions/index.ts";
 import {
   CAPACITOR_DEPENDENCIES,
@@ -430,6 +430,20 @@ export async function runCpr(
       tsconfig = emptyTsconfigResult();
     }
     for (const patch of tsconfig.patches) upsert(patch.path, patch.content, patch.reason);
+
+    // Sync Vite resolve.alias with tsconfig path mappings (scoped to root)
+    try {
+      const canonicalFiles: CprFile[] = [
+        ...usable.filter((f) => !patches.some((p) => p.path === f.path)),
+        ...patches.map((p) => ({ path: p.path, content: p.content })),
+      ];
+      const viteAliases = syncViteAliases(canonicalFiles, root);
+      for (const patch of viteAliases.patches) {
+        upsert(patch.path, patch.content, patch.reason);
+      }
+    } catch {
+      // Non-blocking
+    }
 
     // Module System Normalization — runs after dependency reconciliation and
     // after the TypeScript validation, before the build command is ever run.

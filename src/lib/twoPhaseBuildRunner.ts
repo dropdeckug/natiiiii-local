@@ -847,6 +847,7 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
         await Promise.all(collectPromises);
         if (incoming.length > 0) {
           projectStore.mergeFiles(incoming);
+          await persistBuildSource(opts.projectId, "Phase 1 sync");
           const androidCount = incoming.filter(i => i.path.startsWith("android/")).length;
           toast.success(`Synced ${incoming.length} file${incoming.length === 1 ? "" : "s"} from GitHub`, {
             description: androidCount > 0 ? `Includes ${androidCount} android/ files` : undefined,

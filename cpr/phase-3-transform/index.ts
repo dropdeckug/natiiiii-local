@@ -319,3 +319,11 @@ export function assemblePlainHtml(
 
   return { moves, pages };
 }
+
+export {
+  syncViteAliases,
+  extractTsconfigAliases,
+  injectViteAliases,
+  type ViteAliasResult,
+} from "./vite-alias.ts";
+
