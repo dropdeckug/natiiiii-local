@@ -61,7 +61,7 @@ function getTauriSourceWorkflow(appName: string, packageName: string, platforms:
 
   const jobs: string[] = [];
 
-  const sourceExtract = \`
+  const sourceExtract = `
       - name: Extract source code
         run: |
           echo "=== Extracting source ==="
@@ -71,7 +71,7 @@ function getTauriSourceWorkflow(appName: string, packageName: string, platforms:
             PROJECT_ROOT=$(cat .project-root.txt); rm -f .project-root.txt
             if [ -z "$PROJECT_ROOT" ]; then
               echo "No package.json found — checking for static HTML project..."
-              STATIC_ROOT=$(find project-src -maxdepth 4 -name "index.html" -not -path "*/node_modules/*" -exec dirname {} \\\; | head -1)
+              STATIC_ROOT=$(find project-src -maxdepth 4 -name "index.html" -not -path "*/node_modules/*" -exec dirname {} \\; | head -1)
               if [ -z "$STATIC_ROOT" ]; then
                 echo "ERROR: No package.json AND no index.html found in source.zip"
                 exit 1
@@ -79,7 +79,7 @@ function getTauriSourceWorkflow(appName: string, packageName: string, platforms:
               PROJECT_ROOT="$STATIC_ROOT"
               echo "Detected static HTML project at: $PROJECT_ROOT"
               cat > "$PROJECT_ROOT/package.json" <<'STATICPKG'
-{"name":"static-html-app","version":"1.0.0","private":true,"scripts":{"build":"node -e \\\"const fs=require('fs'),path=require('path');fs.mkdirSync('dist',{recursive:true});function cp(s,d){for(const e of fs.readdirSync(s,{withFileTypes:true})){if(e.name==='node_modules'||e.name==='dist'||e.name==='android'||e.name==='ios'||e.name==='www'||e.name.startsWith('.'))continue;const sp=path.join(s,e.name),dp=path.join(d,e.name);if(e.isDirectory()){fs.mkdirSync(dp,{recursive:true});cp(sp,dp);}else fs.copyFileSync(sp,dp);}}cp('.','dist');if(!fs.existsSync('dist/index.html')&&fs.existsSync('index.html'))fs.copyFileSync('index.html','dist/index.html');console.log('static copy -> dist');\\\""}}
+{"name":"static-html-app","version":"1.0.0","private":true,"scripts":{"build":"node -e \\"const fs=require('fs'),path=require('path');fs.mkdirSync('dist',{recursive:true});function cp(s,d){for(const e of fs.readdirSync(s,{withFileTypes:true})){if(e.name==='node_modules'||e.name==='dist'||e.name==='android'||e.name==='ios'||e.name==='www'||e.name.startsWith('.'))continue;const sp=path.join(s,e.name),dp=path.join(d,e.name);if(e.isDirectory()){fs.mkdirSync(dp,{recursive:true});cp(sp,dp);}else fs.copyFileSync(sp,dp);}}cp('.','dist');if(!fs.existsSync('dist/index.html')&&fs.existsSync('index.html'))fs.copyFileSync('index.html','dist/index.html');console.log('static copy -> dist');\\""}}
 STATICPKG
             fi
             echo "Selected project root: $PROJECT_ROOT"
@@ -115,23 +115,23 @@ STATICPKG
             FOUND_OUTPUT="."
           fi
           if [ ! -s www/index.html ]; then
-            if [ -z "\${url || ''}" ]; then
+            if [ -z "${url || ''}" ]; then
               echo "ERROR: Build output verification failed — www/index.html missing or empty"
               exit 1
             fi
           fi
-\`;
+`;
 
-  const tauriSetup = \`
+  const tauriSetup = `
       - name: Setup Tauri project
         run: |
           # If no www/index.html and no URL, create a fallback
-          if [ ! -f www/index.html ] && [ -z "\${url || ''}" ]; then
+          if [ ! -f www/index.html ] && [ -z "${url || ''}" ]; then
             mkdir -p www
-            echo '<!DOCTYPE html><html><head><title>\${appName}</title></head><body><h1>\${appName}</h1><p>Desktop app</p></body></html>' > www/index.html
+            echo '<!DOCTYPE html><html><head><title>${appName}</title></head><body><h1>${appName}</h1><p>Desktop app</p></body></html>' > www/index.html
           fi
           npm install @tauri-apps/cli@latest @tauri-apps/api@latest
-          npx tauri init --app-name "\${appName}" --window-title "\${appName}" --frontend-dist "../www" --frontend-dev-cmd "npm run dev" --frontend-build-cmd "npm run build" --force
+          npx tauri init --app-name "${appName}" --window-title "${appName}" --frontend-dist "../www" --frontend-dev-cmd "npm run dev" --frontend-build-cmd "npm run build" --force
           
           # Fix tauri.conf.json to use the correct bundle identifier
           node -e "
@@ -140,17 +140,17 @@ STATICPKG
             const conf = JSON.parse(fs.readFileSync(confPath, 'utf8'));
             if(conf.tauri) {
                 conf.tauri.bundle = conf.tauri.bundle || {};
-                conf.tauri.bundle.identifier = '\${packageName}';
+                conf.tauri.bundle.identifier = '${packageName}';
             } else if(conf.app) {
                 // Tauri 2.0 structure
-                conf.identifier = '\${packageName}';
+                conf.identifier = '${packageName}';
             }
             fs.writeFileSync(confPath, JSON.stringify(conf, null, 2));
           "
-\`;
+`;
 
   if (hasWin || hasLinux) {
-    jobs.push(\`
+    jobs.push(`
   build-linux-win:
     runs-on: ubuntu-latest
     steps:
@@ -166,11 +166,11 @@ STATICPKG
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file libssl-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-\${sourceExtract}\${tauriSetup}
+${sourceExtract}${tauriSetup}
       - name: Build desktop apps
         run: npx tauri build
         env:
-          GITHUB_TOKEN: \\\${{ github.token }}
+          GITHUB_TOKEN: \${{ github.token }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -181,11 +181,11 @@ STATICPKG
             src-tauri/target/release/bundle/msi/*.msi
             src-tauri/target/release/bundle/nsis/*.exe
           retention-days: 7
-          if-no-files-found: warn\`);
+          if-no-files-found: warn`);
   }
 
   if (hasMac) {
-    jobs.push(\`
+    jobs.push(`
   build-mac:
     runs-on: macos-latest
     steps:
@@ -196,11 +196,11 @@ STATICPKG
           node-version: '20'
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
-\${sourceExtract}\${tauriSetup}
+${sourceExtract}${tauriSetup}
       - name: Build macOS app
         run: npx tauri build
         env:
-          GITHUB_TOKEN: \\\${{ github.token }}
+          GITHUB_TOKEN: \${{ github.token }}
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -208,17 +208,17 @@ STATICPKG
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
           retention-days: 7
-          if-no-files-found: warn\`);
+          if-no-files-found: warn`);
   }
 
-  return \`name: Build Desktop Apps (Tauri)
+  return `name: Build Desktop Apps (Tauri)
 on:
   push:
     branches: [main]
 env:
   CI: false
 jobs:
-\${jobs.join("\\n")}\`;
+${jobs.join("\n")}`;
 }
 
 async function startBuild(body: DesktopBuildRequest, token: string) {

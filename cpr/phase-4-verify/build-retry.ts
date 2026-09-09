@@ -14,7 +14,8 @@ import { computeStderrFingerprint, hasProgress } from "../../supabase/functions/
 
 export { packageFromSpecifier };
 
-export const MAX_AUTO_BUILD_RETRIES = 5;
+export { MAX_AUTO_BUILD_RETRIES } from "../../supabase/functions/_shared/cprRunnerScripts.ts";
+import { MAX_AUTO_BUILD_RETRIES } from "../../supabase/functions/_shared/cprRunnerScripts.ts";
 
 const UNRESOLVED_PATTERNS: RegExp[] = [
   /failed to resolve import\s+["']([^"']+)["']/i,
