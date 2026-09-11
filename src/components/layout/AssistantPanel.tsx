@@ -71,21 +71,21 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge-ai-cha
 const DEFAULT_MODEL_ID = "google/gemini-3.6-flash";
 
 const AI_MODELS = [
+  { id: "google/gemini-3.8-flash",        label: "Gemini 3.8 Flash",         group: "Google" },
+  { id: "google/gemini-3.7-flash",        label: "Gemini 3.7 Flash",         group: "Google" },
   { id: "google/gemini-3.6-flash",        label: "Gemini 3.6 Flash",         group: "Google" },
-  { id: "google/gemini-3.5-flash",        label: "Gemini 3.5 Flash",         group: "Google" },
   { id: "google/gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro (Preview)", group: "Google" },
   { id: "google/gemini-3.1-flash-lite",   label: "Gemini 3.1 Flash Lite",    group: "Google" },
   { id: "google/gemini-3-flash-preview",  label: "Gemini 3 Flash (Preview)", group: "Google" },
+  { id: "openai/gpt-6-astra",             label: "GPT-6 Astra",              group: "OpenAI" },
   { id: "openai/gpt-5.6-sol",             label: "GPT-5.6 Sol",              group: "OpenAI" },
   { id: "openai/gpt-5.6-terra",           label: "GPT-5.6 Terra",            group: "OpenAI" },
   { id: "openai/gpt-5.6-luna",            label: "GPT-5.6 Luna",             group: "OpenAI" },
+  { id: "openai/gpt-5.5-pro",             label: "GPT-5.5 Pro",              group: "OpenAI" },
   { id: "openai/gpt-5.5",                 label: "GPT-5.5",                  group: "OpenAI" },
   { id: "openai/gpt-5.4",                 label: "GPT-5.4",                  group: "OpenAI" },
   { id: "openai/gpt-5.4-mini",            label: "GPT-5.4 Mini",             group: "OpenAI" },
   { id: "openai/gpt-5.4-nano",            label: "GPT-5.4 Nano",             group: "OpenAI" },
-  { id: "openai/gpt-5.2",                 label: "GPT-5.2",                  group: "OpenAI" },
-  { id: "openai/gpt-5",                   label: "GPT-5",                    group: "OpenAI" },
-  { id: "openai/gpt-5-mini",              label: "GPT-5 Mini",               group: "OpenAI" },
   { id: "openai/gpt-5-nano",              label: "GPT-5 Nano",               group: "OpenAI" },
 ];
 

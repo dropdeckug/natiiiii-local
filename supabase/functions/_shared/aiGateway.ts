@@ -32,35 +32,37 @@ export const FALLBACK_MODEL = "google/gemini-3.1-flash-lite";
 export const LEGACY_FALLBACK_MODEL = FALLBACK_MODEL;
 
 
-/** Every model callers may select. Anything else is normalized away. */
+/** Every model callers may select — mirrors the live gateway catalogue. */
 export const SUPPORTED_MODELS = [
   // Google
+  "google/gemini-3.8-flash",
+  "google/gemini-3.7-flash",
   "google/gemini-3.6-flash",
-  "google/gemini-3.5-flash",
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-flash-lite",
   "google/gemini-3-flash-preview",
-  // Gemini 2.5 is retired for new users — see LEGACY_MAP for the upgrade path.
   // OpenAI
+  "openai/gpt-6-astra",
   "openai/gpt-5.6-sol",
   "openai/gpt-5.6-terra",
   "openai/gpt-5.6-luna",
+  "openai/gpt-5.5-pro",
   "openai/gpt-5.5",
   "openai/gpt-5.4",
   "openai/gpt-5.4-mini",
   "openai/gpt-5.4-nano",
-  "openai/gpt-5.2",
-  "openai/gpt-5",
-  "openai/gpt-5-mini",
   "openai/gpt-5-nano",
+  "openai/chat-latest",
 ] as const;
 
 const SUPPORTED = new Set<string>(SUPPORTED_MODELS);
 
-/** Legacy / bare ids mapped onto real gateway model ids. */
+/** Legacy / bare / retired ids mapped onto live gateway model ids. */
 const LEGACY_MAP: Record<string, string> = {
+  "gemini-3.8-flash": "google/gemini-3.8-flash",
+  "gemini-3.7-flash": "google/gemini-3.7-flash",
   "gemini-3.6-flash": "google/gemini-3.6-flash",
-  "gemini-3.5-flash": "google/gemini-3.5-flash",
+  "gemini-3.5-flash": "google/gemini-3.6-flash",
   "gemini-3.5-flash-lite": "google/gemini-3.1-flash-lite",
   "gemini-3.1-pro-preview": "google/gemini-3.1-pro-preview",
   "gemini-3.1-flash-lite": "google/gemini-3.1-flash-lite",
@@ -71,14 +73,17 @@ const LEGACY_MAP: Record<string, string> = {
   "gemini-2.5-pro": "google/gemini-3.1-pro-preview",
   "gemini-2.5-flash": "google/gemini-3.6-flash",
   "gemini-2.5-flash-lite": "google/gemini-3.1-flash-lite",
-  "gpt-5": "openai/gpt-5",
-  "gpt-5-mini": "openai/gpt-5-mini",
+  // Retired OpenAI ids.
+  "gpt-6-astra": "openai/gpt-6-astra",
+  "gpt-5": "openai/gpt-5.4",
+  "gpt-5-mini": "openai/gpt-5.4-mini",
   "gpt-5-nano": "openai/gpt-5-nano",
-  "gpt-5.2": "openai/gpt-5.2",
+  "gpt-5.2": "openai/gpt-5.4",
   "gpt-5.4": "openai/gpt-5.4",
   "gpt-5.4-mini": "openai/gpt-5.4-mini",
   "gpt-5.4-nano": "openai/gpt-5.4-nano",
   "gpt-5.5": "openai/gpt-5.5",
+  "gpt-5.5-pro": "openai/gpt-5.5-pro",
   "gpt-5.6-sol": "openai/gpt-5.6-sol",
   "gpt-5.6-terra": "openai/gpt-5.6-terra",
   "gpt-5.6-luna": "openai/gpt-5.6-luna",
@@ -202,10 +207,15 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
 
   const transient = (r: Response) =>
     !r.ok && (r.status >= 500 || r.status === 429);
+  /** Provider-level rejections (bad key, blocked project, retired model). */
+  const providerUnusable = (r: Response) =>
+    !r.ok && [400, 401, 403, 404].includes(r.status);
 
   if (preferGoogle && googleKey) {
     const resp = await sendGoogle(model);
-    if (!transient(resp) || !lovableKey) return resp;
+    if (resp.ok) return resp;
+    if (!lovableKey || provider === "google-ai-studio") return resp;
+    if (!transient(resp) && !providerUnusable(resp)) return resp;
     console.warn(`[ai] Google AI Studio ${model} returned ${resp.status}; retrying on Lovable AI Gateway`);
   }
 
