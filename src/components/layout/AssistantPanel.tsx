@@ -68,7 +68,7 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge-ai-cha
  * OpenAI-compatible endpoint. Tool calling is supported on every entry.
  */
 /** Cheapest capable default for chat and the build workflow. */
-const DEFAULT_MODEL_ID = "google/gemini-2.5-flash";
+const DEFAULT_MODEL_ID = "google/gemini-3.6-flash";
 
 const AI_MODELS = [
   { id: "google/gemini-3.6-flash",        label: "Gemini 3.6 Flash",         group: "Google" },
@@ -76,9 +76,6 @@ const AI_MODELS = [
   { id: "google/gemini-3.1-pro-preview",  label: "Gemini 3.1 Pro (Preview)", group: "Google" },
   { id: "google/gemini-3.1-flash-lite",   label: "Gemini 3.1 Flash Lite",    group: "Google" },
   { id: "google/gemini-3-flash-preview",  label: "Gemini 3 Flash (Preview)", group: "Google" },
-  { id: "google/gemini-2.5-pro",          label: "Gemini 2.5 Pro",           group: "Google" },
-  { id: "google/gemini-2.5-flash",        label: "Gemini 2.5 Flash",         group: "Google" },
-  { id: "google/gemini-2.5-flash-lite",   label: "Gemini 2.5 Flash Lite",    group: "Google" },
   { id: "openai/gpt-5.6-sol",             label: "GPT-5.6 Sol",              group: "OpenAI" },
   { id: "openai/gpt-5.6-terra",           label: "GPT-5.6 Terra",            group: "OpenAI" },
   { id: "openai/gpt-5.6-luna",            label: "GPT-5.6 Luna",             group: "OpenAI" },
@@ -238,7 +235,7 @@ const AssistantPanel = ({ onClose }: AssistantPanelProps) => {
   const [isLoading, setIsLoading] = useState(false);
   // Caption is centralized in buildStore (single source of truth — prevents the "Agent" + "Thinking" duplicate spinner).
   const [liveTimeline, setLiveTimeline] = useState<ChatTimelineStep[]>([]);
-  const DEFAULT_MODEL_ID = "google/gemini-2.5-flash";
+  const DEFAULT_MODEL_ID = "google/gemini-3.6-flash";
   const [selectedModel, setSelectedModel] = useState(
     AI_MODELS.find((m) => m.id === DEFAULT_MODEL_ID) ?? AI_MODELS[0],
   );

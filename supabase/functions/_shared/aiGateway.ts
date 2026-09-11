@@ -24,10 +24,10 @@ export const LOVABLE_GATEWAY_URL =
 export const GOOGLE_AI_STUDIO_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-/** Default model — the cheapest Gemini 2.5 tier with solid tool calling. */
-export const DEFAULT_MODEL = "google/gemini-2.5-flash";
+/** Default model — cheapest current-generation Gemini with solid tool calling. */
+export const DEFAULT_MODEL = "google/gemini-3.6-flash";
 /** Used when the selected model fails (unavailable / quota). */
-export const FALLBACK_MODEL = "google/gemini-2.5-flash-lite";
+export const FALLBACK_MODEL = "google/gemini-3.1-flash-lite";
 /** @deprecated retained for callers that still import it. */
 export const LEGACY_FALLBACK_MODEL = FALLBACK_MODEL;
 
@@ -40,9 +40,7 @@ export const SUPPORTED_MODELS = [
   "google/gemini-3.1-pro-preview",
   "google/gemini-3.1-flash-lite",
   "google/gemini-3-flash-preview",
-  "google/gemini-2.5-pro",
-  "google/gemini-2.5-flash",
-  "google/gemini-2.5-flash-lite",
+  // Gemini 2.5 is retired for new users — see LEGACY_MAP for the upgrade path.
   // OpenAI
   "openai/gpt-5.6-sol",
   "openai/gpt-5.6-terra",
@@ -69,9 +67,10 @@ const LEGACY_MAP: Record<string, string> = {
   "gemini-3.1-flash-lite-preview": "google/gemini-3.1-flash-lite",
   "gemini-3-pro-preview": "google/gemini-3.1-pro-preview",
   "gemini-3-flash-preview": "google/gemini-3-flash-preview",
-  "gemini-2.5-pro": "google/gemini-2.5-pro",
-  "gemini-2.5-flash": "google/gemini-2.5-flash",
-  "gemini-2.5-flash-lite": "google/gemini-2.5-flash-lite",
+  // Gemini 2.5 is no longer served to new users — upgrade to the 3.x equivalent.
+  "gemini-2.5-pro": "google/gemini-3.1-pro-preview",
+  "gemini-2.5-flash": "google/gemini-3.6-flash",
+  "gemini-2.5-flash-lite": "google/gemini-3.1-flash-lite",
   "gpt-5": "openai/gpt-5",
   "gpt-5-mini": "openai/gpt-5-mini",
   "gpt-5-nano": "openai/gpt-5-nano",
