@@ -5,7 +5,7 @@
 // project inspection, surgical patching, and verification tools.
 
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
-import { gatewayFetch, DEFAULT_MODEL, FALLBACK_MODEL } from "../_shared/aiGateway.ts";
+import { gatewayFetch, DEFAULT_MODEL } from "../_shared/aiGateway.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -274,50 +274,20 @@ serve(async (req) => {
       });
     }
 
-    let aiResp: Response;
-    try {
-      aiResp = await gatewayFetch({
-        model,
-        payload: {
-          messages,
-          tools: REPAIR_TOOLS,
-        },
-      });
-    } catch (fetchErr) {
-      console.warn(`[code-repair-agent] gatewayFetch failed with ${model}, retrying fallback ${FALLBACK_MODEL}:`, fetchErr);
-      aiResp = await gatewayFetch({
-        model: FALLBACK_MODEL,
-        payload: {
-          messages,
-          tools: REPAIR_TOOLS,
-        },
-      });
-    }
+    const aiResp = await gatewayFetch({
+      model,
+      provider: "google-ai-studio",
+      payload: {
+        messages,
+        tools: REPAIR_TOOLS,
+      },
+    });
 
     if (!aiResp.ok) {
       const errText = await aiResp.text();
       console.warn(`[code-repair-agent] model error ${aiResp.status}:`, errText);
-      // Attempt fallback model if not already using it
-      if (model !== FALLBACK_MODEL) {
-        console.info(`[code-repair-agent] attempting fallback model ${FALLBACK_MODEL}`);
-        const fallbackResp = await gatewayFetch({
-          model: FALLBACK_MODEL,
-          payload: {
-            messages,
-            tools: REPAIR_TOOLS,
-          },
-        });
-        if (fallbackResp.ok) {
-          const fallbackData = await fallbackResp.json();
-          const message = fallbackData?.choices?.[0]?.message;
-          return new Response(JSON.stringify({ message }), {
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-      }
-
       return new Response(
-        JSON.stringify({ error: `AI gateway error ${aiResp.status}`, detail: errText.slice(0, 500) }),
+        JSON.stringify({ error: `Gemini API error ${aiResp.status}`, detail: errText.slice(0, 500) }),
         { status: aiResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

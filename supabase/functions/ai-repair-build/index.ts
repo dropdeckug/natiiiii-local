@@ -157,7 +157,7 @@ serve(async (req) => {
 
     const aiResp = await gatewayFetch({
       model,
-      provider: "lovable",
+      provider: "google-ai-studio",
       payload: {
         messages: [
           { role: "system", content: SYSTEM_PROMPT },
@@ -171,7 +171,7 @@ serve(async (req) => {
     if (!aiResp.ok) {
       const t = await aiResp.text();
       return new Response(
-        JSON.stringify({ error: `AI gateway error ${aiResp.status}`, detail: t.slice(0, 500) }),
+        JSON.stringify({ error: `Gemini API error ${aiResp.status}`, detail: t.slice(0, 500) }),
         { status: aiResp.status, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }

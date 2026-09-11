@@ -1,6 +1,6 @@
 /**
- * AI Gateway router — Google AI Studio first, Lovable AI Gateway as the peer
- * provider and fallback.
+ * AI provider router — Google AI Studio first, with Lovable AI available only
+ * when Gemini is not configured or a caller explicitly opts into Lovable.
  *
  * Every AI route in this project (chat, plugin wiring, android config,
  * project analysis, build repair) goes through `gatewayFetch`.
@@ -8,8 +8,8 @@
  * Provider selection:
  *   • `google/*` models are sent to Google AI Studio's OpenAI-compatible
  *     endpoint when `GEMINI_API_KEY` is configured (cheapest path, native
- *     Gemini tool calling). If that call fails transiently, the same request is
- *     retried on the Lovable AI Gateway.
+ *     Gemini tool calling). If that call fails, the request remains on Gemini
+ *     so an exhausted Lovable workspace can never mask the real provider error.
  *   • `openai/*` models always go to the Lovable AI Gateway with
  *     `LOVABLE_API_KEY`.
  *
@@ -190,15 +190,21 @@ export interface GatewayCallOptions {
 /**
  * One chat-completions request. `google/*` models are served by Google AI
  * Studio when `GEMINI_API_KEY` exists, everything else by the Lovable AI
- * Gateway. Returns the raw Response so callers can stream or parse. On a
- * transient failure (429/5xx) it retries: Google AI Studio → Lovable
- * Gateway → FALLBACK_MODEL.
+ * Gateway. Returns the raw Response so callers can stream or parse. Gemini
+ * requests retry once on FALLBACK_MODEL, but never cross providers.
  */
 export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> {
   const lovableKey = Deno.env.get("LOVABLE_API_KEY");
   const googleKey = Deno.env.get("GEMINI_API_KEY");
   const model = preferGoogleModel(normalizeModel(opts.model));
   const provider = opts.provider ?? "auto";
+
+  if (provider === "google-ai-studio" && !googleKey) {
+    return new Response(
+      JSON.stringify({ error: "Gemini is not configured. Add GEMINI_API_KEY to edge function secrets." }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
+  }
 
   if (!lovableKey && !googleKey) {
     return new Response(
@@ -239,11 +245,14 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
     const googleModel = model.startsWith("google/") ? model : DEFAULT_MODEL;
     const resp = await sendGoogle(googleModel);
     if (resp.ok) return resp;
-    if (googleModel === FALLBACK_MODEL) return resp;
+    // Authentication, billing, policy, and malformed-request failures are
+    // terminal. Retrying them wastes calls and obscures the actionable error.
+    if (!transient(resp) || googleModel === FALLBACK_MODEL) return resp;
     console.warn(`[ai] Google AI Studio ${googleModel} returned ${resp.status}; retrying on ${FALLBACK_MODEL}`);
     const retry = await sendGoogle(FALLBACK_MODEL);
-    if (retry.ok || !lovableKey) return retry;
-    console.warn(`[ai] Gemini unavailable; falling back to Lovable AI Gateway`);
+    // Provider isolation is deliberate: when GEMINI_API_KEY exists, returning
+    // the actual Gemini failure is safer than silently spending Lovable credits.
+    return retry;
   }
 
   if (!lovableKey) {

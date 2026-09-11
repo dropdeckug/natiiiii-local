@@ -399,7 +399,24 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
       const { data, error } = await supabase.functions.invoke("code-repair-agent", {
         body: { messages, model: input.model },
       });
-      if (error) throw new Error(error.message);
+      if (error) {
+        let detail = error.message;
+        const context = (error as { context?: unknown }).context;
+        if (context instanceof Response) {
+          try {
+            const payload = await context.clone().json();
+            if (payload && typeof payload === "object") {
+              const body = payload as { error?: unknown; detail?: unknown };
+              detail = [body.error, body.detail]
+                .filter((part): part is string => typeof part === "string" && part.length > 0)
+                .join(": ") || detail;
+            }
+          } catch {
+            // Keep the SDK message when the function did not return JSON.
+          }
+        }
+        throw new Error(detail);
+      }
       if ((data as any)?.error) throw new Error((data as any).error);
       assistant = (data as any).message;
     } catch (e: any) {
@@ -407,7 +424,7 @@ export async function runCodeRepairAgent(input: RepairAgentInput): Promise<Repai
       return finish(
         "escalated",
         Math.max(attempts, 1),
-        `The repair agent could not reach the AI service (${e.message || e}). The build needs manual review.`,
+        `Automatic repair is unavailable: ${e.message || e}. The original build failure is unchanged.`,
       );
     }
 
