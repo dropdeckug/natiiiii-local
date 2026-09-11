@@ -476,7 +476,8 @@ async function syncRunnerRepairTelemetry(buildId?: string | null, projectId?: st
 
 async function pollPhaseStatus(repoName: string, runId: number | null, commitSha?: string | null, phase?: string) {
   const buildStore = useBuildStore.getState();
-  const maxPolls = 90;
+  /** ~12 minutes of polling, front-loaded so the timeline appears immediately. */
+  const deadline = Date.now() + 12 * 60 * 1000;
   let poll = 0;
   let lastStepCount = 0;
   let resolvedRunId: number | null = runId;
@@ -484,8 +485,11 @@ async function pollPhaseStatus(repoName: string, runId: number | null, commitSha
   const seenSteps = new Set<string>();
   setLogContext({ repoName, runId: runId ?? null, phase: phase ?? null });
 
-  while (poll < maxPolls) {
-    await new Promise((r) => setTimeout(r, poll < 3 ? 4000 : 8000));
+  while (Date.now() < deadline) {
+    // First check almost immediately, then 1.5s while the run boots, easing to
+    // 3s and finally 6s once steps are streaming.
+    const delay = poll === 0 ? 300 : poll < 20 ? 1500 : poll < 45 ? 3000 : 6000;
+    await new Promise((r) => setTimeout(r, delay));
     poll++;
     const { data, error } = await supabase.functions.invoke("build-apk", {
       body: { action: "status", repoName, runId: resolvedRunId, commitSha: commitSha || undefined },
@@ -984,7 +988,7 @@ export async function runTwoPhaseBuild(opts: RunBuildOptions) {
     const { textSecrets } = await getSecretsForBuild(opts.projectId).catch(() => ({ textSecrets: {} }));
 
     // Resolve preferred model from project record
-    let model = "google/gemini-3.6-flash";
+    let model = "google/gemini-3.1-pro-preview";
     try {
       const { data: proj } = await supabase
         .from("projects")
@@ -1586,7 +1590,7 @@ async function pollIosStatus(repoName: string, initialRunId?: number | null) {
   const seen = new Set<string>();
   setLogContext({ repoName, platform: "ios", phase: "ios-build" });
   for (let poll = 0; poll < maxPolls; poll++) {
-    await new Promise((r) => setTimeout(r, poll < 3 ? 4000 : 8000));
+    await new Promise((r) => setTimeout(r, poll === 0 ? 300 : poll < 20 ? 1500 : poll < 45 ? 3000 : 6000));
     const { data, error } = await supabase.functions.invoke("build-ios", {
       body: { action: "status", repoName, runId: resolvedRunId || undefined },
     });

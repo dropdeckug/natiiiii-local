@@ -3393,7 +3393,9 @@ async function checkStatus(body: BuildRequest, token: string) {
   const runUrl = run.html_url || `https://github.com/${username}/${body.repoName}/actions/runs/${body.runId}`;
   let allStepsData: { name: string; status: string; conclusion: string | null; startedAt: string | null; completedAt: string | null; number: number }[] = [];
 
-  if (run.status === "in_progress" || run.status === "completed") {
+  // Include queued/waiting runs: GitHub already exposes the job's step list
+  // there, so the timeline can render before the first step starts.
+  if (run.status !== "requested") {
     try {
       const jobsRes = await githubFetch(`/repos/${username}/${body.repoName}/actions/runs/${body.runId}/jobs`, token);
       const jobs = await jobsRes.json();

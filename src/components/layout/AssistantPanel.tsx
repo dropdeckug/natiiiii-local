@@ -68,7 +68,7 @@ const CHAT_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/forge-ai-cha
  * OpenAI-compatible endpoint. Tool calling is supported on every entry.
  */
 /** Cheapest capable default for chat and the build workflow. */
-const DEFAULT_MODEL_ID = "google/gemini-3.6-flash";
+const DEFAULT_MODEL_ID = "google/gemini-3.1-pro-preview";
 
 const AI_MODELS = [
   { id: "google/gemini-3.8-flash",        label: "Gemini 3.8 Flash",         group: "Google" },
@@ -235,7 +235,7 @@ const AssistantPanel = ({ onClose }: AssistantPanelProps) => {
   const [isLoading, setIsLoading] = useState(false);
   // Caption is centralized in buildStore (single source of truth — prevents the "Agent" + "Thinking" duplicate spinner).
   const [liveTimeline, setLiveTimeline] = useState<ChatTimelineStep[]>([]);
-  const DEFAULT_MODEL_ID = "google/gemini-3.6-flash";
+  const DEFAULT_MODEL_ID = "google/gemini-3.1-pro-preview";
   const [selectedModel, setSelectedModel] = useState(
     AI_MODELS.find((m) => m.id === DEFAULT_MODEL_ID) ?? AI_MODELS[0],
   );

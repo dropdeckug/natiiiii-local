@@ -24,8 +24,8 @@ export const LOVABLE_GATEWAY_URL =
 export const GOOGLE_AI_STUDIO_URL =
   "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions";
 
-/** Default model — cheapest current-generation Gemini with solid tool calling. */
-export const DEFAULT_MODEL = "google/gemini-3.6-flash";
+/** Default model — Gemini 3.1 served by the project's own Google AI Studio key. */
+export const DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
 /** Used when the selected model fails (unavailable / quota). */
 export const FALLBACK_MODEL = "google/gemini-3.1-flash-lite";
 /** @deprecated retained for callers that still import it. */
@@ -121,6 +121,33 @@ export function normalizeModel(model?: string): string {
   return DEFAULT_MODEL;
 }
 
+/** OpenAI ids mapped onto the closest Gemini model served by GEMINI_API_KEY. */
+const OPENAI_TO_GOOGLE: Record<string, string> = {
+  "openai/gpt-6-astra": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.6-sol": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.6-terra": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.6-luna": "google/gemini-3.1-flash-lite",
+  "openai/gpt-5.5-pro": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.5": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.4": "google/gemini-3.1-pro-preview",
+  "openai/gpt-5.4-mini": "google/gemini-3.6-flash",
+  "openai/gpt-5.4-nano": "google/gemini-3.1-flash-lite",
+  "openai/gpt-5-nano": "google/gemini-3.1-flash-lite",
+  "openai/chat-latest": "google/gemini-3.6-flash",
+};
+
+/**
+ * When the project has its own Google AI Studio key, every request runs on
+ * Gemini — OpenAI ids are mapped to their closest Gemini equivalent so no call
+ * silently spends Lovable AI workspace credits.
+ */
+export function preferGoogleModel(model: string): string {
+  if (!hasGeminiKey()) return model;
+  if (!model.startsWith("openai/")) return model;
+  return OPENAI_TO_GOOGLE[model] ?? DEFAULT_MODEL;
+}
+
+
 function buildBody(model: string, payload: Record<string, unknown>) {
   const body: Record<string, unknown> = { model, ...payload };
   const isOpenAI = model.startsWith("openai/");
@@ -170,7 +197,7 @@ export interface GatewayCallOptions {
 export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> {
   const lovableKey = Deno.env.get("LOVABLE_API_KEY");
   const googleKey = Deno.env.get("GEMINI_API_KEY");
-  const model = normalizeModel(opts.model);
+  const model = preferGoogleModel(normalizeModel(opts.model));
   const provider = opts.provider ?? "auto";
 
   const preferGoogle =
@@ -214,9 +241,18 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
   if (preferGoogle && googleKey) {
     const resp = await sendGoogle(model);
     if (resp.ok) return resp;
-    if (!lovableKey || provider === "google-ai-studio") return resp;
-    if (!transient(resp) && !providerUnusable(resp)) return resp;
-    console.warn(`[ai] Google AI Studio ${model} returned ${resp.status}; retrying on Lovable AI Gateway`);
+    // Stay on the project's own Gemini key: try the cheaper Gemini model
+    // before ever spending Lovable AI workspace credits.
+    if (model !== FALLBACK_MODEL && (transient(resp) || providerUnusable(resp))) {
+      console.warn(`[ai] Google AI Studio ${model} returned ${resp.status}; retrying on ${FALLBACK_MODEL}`);
+      const retry = await sendGoogle(FALLBACK_MODEL);
+      if (retry.ok) return retry;
+      if (!lovableKey || provider === "google-ai-studio") return retry;
+    } else {
+      if (!lovableKey || provider === "google-ai-studio") return resp;
+      if (!transient(resp) && !providerUnusable(resp)) return resp;
+    }
+    console.warn(`[ai] Google AI Studio unavailable; retrying on Lovable AI Gateway`);
   }
 
   if (!lovableKey) {

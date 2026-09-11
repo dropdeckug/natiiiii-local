@@ -17,9 +17,9 @@ interface SettingsPanelProps {
 
 // Models served by the Lovable AI gateway — the only gateway NativeBridge uses.
 const MODELS: { id: string; name: string; provider: string; tag?: string; description: string }[] = [
-  { id: "google/gemini-3.6-flash", name: "Gemini 3.6 Flash", provider: "Google", tag: "Default", description: "Latest Flash generation — strongest agentic tool use at Flash cost. Recommended for most builds." },
+  { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro (Preview)", provider: "Google", tag: "Default", description: "Deepest Gemini reasoning — best for complex native wiring and hard repairs. Runs on your own Gemini API key." },
+  { id: "google/gemini-3.6-flash", name: "Gemini 3.6 Flash", provider: "Google", description: "Latest Flash generation — strong agentic tool use at Flash cost." },
   { id: "google/gemini-3.5-flash", name: "Gemini 3.5 Flash", provider: "Google", description: "High-efficiency Gemini 3.5 — fast coding, reasoning and tool calling." },
-  { id: "google/gemini-3.1-pro-preview", name: "Gemini 3.1 Pro (Preview)", provider: "Google", description: "Deepest Gemini reasoning — best for complex native wiring and hard repairs." },
   { id: "google/gemini-3.1-flash-lite", name: "Gemini 3.1 Flash Lite", provider: "Google", description: "Cost-efficient — high-volume classification and extraction." },
   { id: "google/gemini-3-flash-preview", name: "Gemini 3 Flash (Preview)", provider: "Google", description: "Fast preview generation of Gemini Flash." },
   { id: "openai/gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "OpenAI", tag: "Flagship", description: "OpenAI's flagship — hardest reasoning, coding and agentic work." },
@@ -37,7 +37,7 @@ const MODELS: { id: string; name: string; provider: string; tag?: string; descri
 
 const AiModelsPanel = () => {
   const { id: projectId } = useParams<{ id: string }>();
-  const [selected, setSelected] = useState<string>("google/gemini-3.6-flash");
+  const [selected, setSelected] = useState<string>("google/gemini-3.1-pro-preview");
 
 
   const [saving, setSaving] = useState(false);
