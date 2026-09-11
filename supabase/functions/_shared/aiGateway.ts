@@ -200,10 +200,6 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
   const model = preferGoogleModel(normalizeModel(opts.model));
   const provider = opts.provider ?? "auto";
 
-  const preferGoogle =
-    provider === "google-ai-studio" ||
-    (provider === "auto" && model.startsWith("google/") && Boolean(googleKey));
-
   if (!lovableKey && !googleKey) {
     return new Response(
       JSON.stringify({ error: "No AI provider configured (GEMINI_API_KEY or LOVABLE_API_KEY)" }),
@@ -234,31 +230,27 @@ export async function gatewayFetch(opts: GatewayCallOptions): Promise<Response> 
 
   const transient = (r: Response) =>
     !r.ok && (r.status >= 500 || r.status === 429);
-  /** Provider-level rejections (bad key, blocked project, retired model). */
-  const providerUnusable = (r: Response) =>
-    !r.ok && [400, 401, 403, 404].includes(r.status);
 
-  if (preferGoogle && googleKey) {
-    const resp = await sendGoogle(model);
+  // With the project's own Gemini key configured, every request stays on
+  // Google AI Studio. Lovable AI credits are only used when no Gemini key
+  // exists, or when the caller explicitly forces provider "lovable" —
+  // otherwise an exhausted workspace balance surfaces as a 402 here.
+  if (googleKey && provider !== "lovable") {
+    const googleModel = model.startsWith("google/") ? model : DEFAULT_MODEL;
+    const resp = await sendGoogle(googleModel);
     if (resp.ok) return resp;
-    // Stay on the project's own Gemini key: try the cheaper Gemini model
-    // before ever spending Lovable AI workspace credits.
-    if (model !== FALLBACK_MODEL && (transient(resp) || providerUnusable(resp))) {
-      console.warn(`[ai] Google AI Studio ${model} returned ${resp.status}; retrying on ${FALLBACK_MODEL}`);
-      const retry = await sendGoogle(FALLBACK_MODEL);
-      if (retry.ok) return retry;
-      if (!lovableKey || provider === "google-ai-studio") return retry;
-    } else {
-      if (!lovableKey || provider === "google-ai-studio") return resp;
-      if (!transient(resp) && !providerUnusable(resp)) return resp;
-    }
-    console.warn(`[ai] Google AI Studio unavailable; retrying on Lovable AI Gateway`);
+    if (googleModel === FALLBACK_MODEL) return resp;
+    console.warn(`[ai] Google AI Studio ${googleModel} returned ${resp.status}; retrying on ${FALLBACK_MODEL}`);
+    const retry = await sendGoogle(FALLBACK_MODEL);
+    if (retry.ok || !lovableKey) return retry;
+    console.warn(`[ai] Gemini unavailable; falling back to Lovable AI Gateway`);
   }
 
   if (!lovableKey) {
-    // Google-only deployment: last attempt on the cheaper fallback model.
-    const resp = await sendGoogle(FALLBACK_MODEL);
-    return resp;
+    return new Response(
+      JSON.stringify({ error: "No AI provider configured (GEMINI_API_KEY or LOVABLE_API_KEY)" }),
+      { status: 500, headers: { "Content-Type": "application/json" } },
+    );
   }
 
   const resp = await sendLovable(model);
